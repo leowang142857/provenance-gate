@@ -19,7 +19,7 @@
 | `src/provenance/gitai.ts` | Parse Git AI Standard v3.0.0 authorship logs. Routes `s_`, `h_` and legacy keys to their metadata maps; tolerates missing records. |
 | `src/provenance/trailers.ts` | Detect agents from commit trailers (git trailer semantics: the final paragraph only). |
 | `src/provenance/git.ts` | Thin `git` CLI wrapper: rev-list, notes show, diff-tree, numstat, merge-base. |
-| `src/provenance/collect.ts` | Walk `merge-base(base, head)..head`, combine both signals, produce `ChangeProvenance`. |
+| `src/provenance/collect.ts` | Walk `merge-base(base, head)..head`, blame each changed file at head, look every surviving line up in its commit's authorship log (or trailer signal), produce `ChangeProvenance`. |
 | `src/policy/schema.ts` | Zod schema for `.provenance-policy.yml`; strict keys, defaults, validation errors with paths. |
 | `src/policy/evaluate.ts` | Pure evaluator: `(policy, provenance, review) -> Verdict`. No I/O, fully unit-tested. |
 | `src/report/markdown.ts` | Render a verdict for humans (CLI output and Check Run body). |
@@ -43,14 +43,13 @@
 
 ## Known approximations
 
-- Per-file `aiShare = sum(AI lines over commits) / added lines`, clamped to `[0, 1]`. Lines rewritten across several commits are over-counted. A future version can replay authorship logs through the diff to obtain exact blame.
+- Per-file attribution uses `git blame merge-base..head`: each surviving line maps to the commit and original line number that introduced it, which is then looked up in that commit's authorship log. Git's blame heuristics decide which commit "owns" an unchanged line of text; this matches `git-ai blame` on real repositories, but identical lines moved within a file can be credited to the earlier commit.
 - Merge commits contribute no changed files (we rely on their notes only), so conflict-resolution lines are only attributed when git-ai recorded them.
 - Approvals are matched by login; team membership is resolved only for teams named in the policy.
 
 ## Roadmap
 
-1. Exact blame via log replay instead of summed counts.
-2. Support agentdiff records and GitHub's native agent-authored PR signal as additional sources.
-3. GitLab / Gitee merge-request integration (same evaluator, different review-state adapter).
-4. Policy test harness: `provenance-gate test` runs a policy against fixture changes and asserts verdicts.
-5. Org-level reporting: revert rate per model / agent / skill to inform `agents` rules.
+1. Support agentdiff records and GitHub's native agent-authored PR signal as additional sources.
+2. GitLab / Gitee merge-request integration (same evaluator, different review-state adapter).
+3. Policy test harness: `provenance-gate test` runs a policy against fixture changes and asserts verdicts.
+4. Org-level reporting: revert rate per model / agent / skill to inform `agents` rules.

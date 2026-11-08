@@ -112,10 +112,21 @@ APP_ID=... PRIVATE_KEY="$(cat key.pem)" WEBHOOK_SECRET=... node dist/server.js
 
 设置 `APPLY_LABELS=false` 可禁止 App 自动添加 `require.labels` 中的标签。
 
+## 真实环境演示
+
+`scripts/demo-with-git-ai.sh` 会在需要时安装 [git-ai](https://usegitai.com)，搭建一个带有真实 git-ai 归因笔记的仓库（通过 git-ai 的 `claude` 钩子预设模拟 Claude Code 编辑、一次 known-human 编辑、一个只有 Cursor co-author trailer 的同事提交），然后对它运行 `check`：
+
+```bash
+pnpm build && bash scripts/demo-with-git-ai.sh
+```
+
+已在 Linux 虚拟机上用 git-ai 1.7.6 验证：每个文件的 AI 行数与 `git-ai blame` 逐行一致，包括人类改写了一部分 agent 输出的文件。
+
 ## 局限
 
-- AI 占比是估算值。authorship log 记录的是各自提交时的行号，同一行被两个会话改写会被计两次；占比上限为 100%，误差方向是"多报 AI"。
-- commit trailer 只能说明 agent 参与了这个提交，无法定位到行，这些文件按全 AI 处理。
+- 只统计 PR 最终版本中存活下来的行：每一行通过 blame 定位到引入它的提交，再到该提交的 authorship log 中查归属。纯删除的改动没有存活行，按触碰该文件的提交的置信度判断。
+- commit trailer 只能说明 agent 参与了这个提交，无法定位到行，这些提交中存活下来的行按 AI 计。
+- git-ai 是异步写入笔记的；在它识别为 agent 环境的机器上（云端 agent、带 agent 环境变量的 CI），可能会把编辑归到 `cloud-agent`。
 - 团队成员关系需要组织读权限，没有权限时 `teams` 要求无法满足。
 - GitHub App 尚未在真实安装上跑过；CLI 和求值器有针对真实 git 仓库的测试覆盖。
 

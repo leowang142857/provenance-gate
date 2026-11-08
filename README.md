@@ -122,10 +122,21 @@ const verdict = evaluatePolicy(parsePolicy(yamlText), provenance, { approvals: [
 console.log(renderMarkdown(provenance, verdict));
 ```
 
+## Real-world demo
+
+`scripts/demo-with-git-ai.sh` installs [git-ai](https://usegitai.com) if needed, builds a repository whose commits carry real git-ai authorship notes (Claude Code edits through git-ai's `claude` hook preset, a known-human edit, a teammate commit with only a Cursor co-author trailer) and runs `check` against it:
+
+```bash
+pnpm build && bash scripts/demo-with-git-ai.sh
+```
+
+Verified with git-ai 1.7.6 on Linux: per-file AI lines match `git-ai blame` line for line, including files where a human rewrote part of an agent's output.
+
 ## Limitations
 
-- AI shares are estimates. Authorship logs describe line numbers at their own commit, so a line rewritten by two sessions is counted twice; shares are clamped to 100% and err towards reporting more AI.
-- Commit trailers only say an agent was involved somewhere in the commit. Those files are treated as fully AI-written.
+- Only lines that survive to the head of the PR are counted: each line is blamed to the commit that introduced it and looked up in that commit's authorship log. Deletion-only changes have no surviving lines and are judged by the confidence of the commits that touched the file.
+- Commit trailers only say an agent was involved somewhere in the commit. Surviving lines from those commits are counted as AI.
+- git-ai writes notes asynchronously and, on machines it detects as agent environments (cloud agents, CI with agent variables), may attribute edits to `cloud-agent`.
 - Team membership requires organization read access; without it, `teams` requirements cannot be satisfied.
 - The GitHub App has not been exercised against a live installation yet; the CLI and evaluator are covered by tests against real git repositories.
 
