@@ -185,9 +185,10 @@ function parseEntry(line: string, lookup: Lookup, unresolvedKeys: string[]): Aut
 
 function toAgentId(raw: RawAgentId | undefined): AgentId {
   const tool = typeof raw?.tool === 'string' && raw.tool.length > 0 ? raw.tool.toLowerCase() : 'unknown';
+  const model = typeof raw?.model === 'string' ? raw.model.trim() : '';
   return {
     tool,
-    ...(typeof raw?.model === 'string' && raw.model.length > 0 ? { model: raw.model } : {}),
+    ...(model.length > 0 && model.toLowerCase() !== 'unknown' ? { model } : {}),
     ...(typeof raw?.id === 'string' && raw.id.length > 0 ? { id: raw.id } : {}),
   };
 }
