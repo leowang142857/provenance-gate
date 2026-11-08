@@ -59,7 +59,7 @@ export async function fetchReviewState(
     if (review.state !== 'APPROVED' || !review.user) {
       continue;
     }
-    if (options.headSha && review.commit_id && review.commit_id !== options.headSha) {
+    if (options.headSha && review.commit_id !== options.headSha) {
       continue;
     }
     const approval: Approval = { login: review.user.login, isBot: review.user.type === 'Bot' };

@@ -1,9 +1,16 @@
 # Copy to .github/workflows/provenance-gate.yml in the repository you want to protect,
 # then mark the "gate" job as a required status check in branch protection.
+#
+# pull_request_target runs this file as it exists on the base branch, so a pull request cannot
+# edit the gate that judges it. That trigger has access to the base repository's secrets, so this
+# job only reads the PR's git history and never runs code from the PR checkout.
+#
+# pull_request_review has no *_target variant and runs the PR's copy of this file. Require code
+# owner review for .github/workflows/** (or use the GitHub App) if PR authors are untrusted.
 name: provenance-gate
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted, dismissed]
@@ -43,6 +50,7 @@ jobs:
           node /tmp/provenance-gate/dist/cli.js check \
             --base ${{ github.event.pull_request.base.sha }} \
             --head ${{ github.event.pull_request.head.sha }} \
+            --policy-ref ${{ github.event.pull_request.base.sha }} \
             --github ${{ github.repository }}#${{ github.event.pull_request.number }} \
             | tee "$GITHUB_STEP_SUMMARY"
           exit "${PIPESTATUS[0]}"

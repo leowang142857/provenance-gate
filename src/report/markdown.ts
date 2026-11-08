@@ -44,7 +44,7 @@ export function renderMarkdown(provenance: ChangeProvenance, verdict: Verdict): 
   const files = [...provenance.files].sort(byInterest);
   for (const file of files.slice(0, MAX_FILE_ROWS)) {
     out.push(
-      `| ${escapeCell(file.path)} | +${file.addedLines}/-${file.deletedLines} | ${file.aiLines} | ${formatShare(file)} | ${file.confidence}${file.assumedAi ? ' (agent in commit)' : ''} | ${file.agents.map(agentKey).join(', ') || '-'} |`,
+      `| ${escapeCell(file.previousPath ? `${file.previousPath} → ${file.path}` : file.path)} | +${file.addedLines}/-${file.deletedLines} | ${file.aiLines} | ${formatShare(file)} | ${file.confidence}${file.assumedAi ? ' (agent in commit)' : ''} | ${file.agents.map(agentKey).join(', ') || '-'} |`,
     );
   }
   if (files.length > MAX_FILE_ROWS) {

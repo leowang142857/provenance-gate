@@ -105,13 +105,18 @@ export async function collectProvenance(options: CollectOptions): Promise<Change
         attributeLine(acc, record, line.origPath, line.origLine);
       }
     }
-    if (acc.confidences.size === 0) {
-      // Deletion-only (or binary) change: fall back to the commits that touched the file.
-      for (const confidence of touchedBy.get(entry.path) ?? []) {
-        acc.confidences.add(confidence);
-      }
+    // No surviving line to blame (deletion, pure rename, binary): line logs cannot say who removed
+    // or moved content, so any agent involvement in a commit that touched the file counts as AI.
+    let agentTouched = false;
+    if (acc.blamedLines === 0) {
+      const paths = entry.previousPath ? [entry.path, entry.previousPath] : [entry.path];
       for (const record of records.values()) {
-        if (record.provenance.confidence === 'commit-level' && record.provenance.changedFiles.includes(entry.path)) {
+        if (!paths.some((p) => record.provenance.changedFiles.includes(p))) {
+          continue;
+        }
+        acc.confidences.add(record.provenance.confidence);
+        if (record.provenance.agents.length > 0) {
+          agentTouched = true;
           mergeAgents(acc.agents, record.provenance.agents);
         }
       }
@@ -121,13 +126,14 @@ export async function collectProvenance(options: CollectOptions): Promise<Change
     const denominator = Math.max(acc.blamedLines, entry.added);
     files.push({
       path: entry.path,
+      ...(entry.previousPath ? { previousPath: entry.previousPath } : {}),
       addedLines: entry.added,
       deletedLines: entry.deleted,
       aiLines: acc.aiLines,
       humanLines: acc.humanLines,
       assumedAiLines: acc.assumedAiLines,
       unknownLines: acc.unknownLines,
-      aiShare: share(acc.aiLines, denominator),
+      aiShare: acc.blamedLines === 0 ? (agentTouched ? 1 : 0) : share(acc.aiLines, denominator),
       confidence: worst(acc.confidences),
       assumedAi: acc.assumedAiLines > 0 || (entry.added === 0 && acc.confidences.has('commit-level')),
       agents: [...acc.agents.values()],

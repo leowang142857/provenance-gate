@@ -44,6 +44,8 @@ export interface CommitProvenance {
  */
 export interface FileProvenance {
   path: string;
+  /** Path at the merge base when the file was renamed or copied. Path rules match either path. */
+  previousPath?: string;
   addedLines: number;
   deletedLines: number;
   /** Surviving lines attributed to an AI session via line-level logs. */
@@ -54,7 +56,10 @@ export interface FileProvenance {
   assumedAiLines: number;
   /** Surviving lines from commits with no provenance signal at all. */
   unknownLines: number;
-  /** aiLines / addedLines, clamped to [0, 1]. */
+  /**
+   * aiLines / addedLines, clamped to [0, 1]. When nothing was added (deletion, pure rename) it is 1
+   * if any commit that touched the file involved an agent, otherwise 0.
+   */
   aiShare: number;
   /** Worst-case confidence across the commits that contributed surviving lines (or touched the file, for deletions). */
   confidence: Confidence;

@@ -3,7 +3,7 @@
  *
  * On pull request and review events we:
  *   1. shallow-clone the repository with the installation token, including refs/notes/ai
- *   2. read .provenance-policy.yml from the PR head
+ *   2. read .provenance-policy.yml from the PR base, so the PR cannot change its own policy
  *   3. fetch approvals and labels
  *   4. evaluate the policy and publish a Check Run that can be marked "required" in branch protection
  */
@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { App } from '@octokit/app';
 
 import { runCheck } from '../commands/check.js';
-import { git } from '../provenance/git.js';
+import { git, gitTokenEnv } from '../provenance/git.js';
 import { parsePolicy } from '../policy/schema.js';
 import { summaryLine } from '../report/markdown.js';
 import { fetchReviewState, type MinimalOctokit } from './review-state.js';
@@ -123,7 +123,8 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
       output: { title, summary, ...(text ? { text: text.slice(0, 60_000) } : {}) },
     });
 
-  const policyText = await readPolicyFromRepo(octokit, owner, repo, pull.head.sha, policyPath);
+  // The policy comes from the base branch: a pull request must not be able to weaken or delete its own gate.
+  const policyText = await readPolicyFromRepo(octokit, owner, repo, pull.base.sha, policyPath);
   if (policyText === null) {
     await finish('neutral', 'No policy found', `Add \`${policyPath}\` to the repository to enable provenance-gate.`);
     return;
@@ -138,14 +139,15 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
   }
 
   const workdir = await mkdtemp(join(tmpdir(), 'provenance-gate-'));
+  let token = '';
   try {
-    const { token } = (await octokit.auth({ type: 'installation' })) as { token: string };
-    const authedUrl = input.cloneUrl.replace('https://', `https://x-access-token:${token}@`);
+    token = ((await octokit.auth({ type: 'installation' })) as { token: string }).token;
+    const auth = { env: gitTokenEnv(token) };
     await git(workdir, ['init', '--quiet']);
-    await git(workdir, ['remote', 'add', 'origin', authedUrl]);
-    await git(workdir, ['fetch', '--quiet', '--filter=blob:none', 'origin', pull.base.sha, pull.head.sha]);
+    await git(workdir, ['remote', 'add', 'origin', input.cloneUrl]);
+    await git(workdir, ['fetch', '--quiet', '--filter=blob:none', 'origin', pull.base.sha, pull.head.sha], auth);
     try {
-      await git(workdir, ['fetch', '--quiet', 'origin', '+refs/notes/ai:refs/notes/ai']);
+      await git(workdir, ['fetch', '--quiet', 'origin', '+refs/notes/ai:refs/notes/ai'], auth);
     } catch {
       // Repository has no authorship notes yet; commit trailers are the only signal.
     }
@@ -179,11 +181,21 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
     const conclusion = result.verdict.status === 'fail' ? 'failure' : result.verdict.status === 'warn' ? 'neutral' : 'success';
     await finish(conclusion, `Provenance gate: ${result.verdict.status}`, summaryLine(result.provenance, result.verdict), result.markdown);
   } catch (error) {
-    await finish('failure', 'provenance-gate crashed', `\`\`\`\n${(error as Error).message}\n\`\`\``);
+    await finish('failure', 'provenance-gate crashed', `\`\`\`\n${redact((error as Error).message, token)}\n\`\`\``);
     throw error;
   } finally {
     await rm(workdir, { recursive: true, force: true });
   }
+}
+
+/** Check Run output is visible to anyone who can read the repository; never echo credentials into it. */
+export function redact(text: string, token: string): string {
+  let out = text.replace(/(https?:\/\/)[^/@\s]+@/g, '$1***@').replace(/(Authorization:\s*\w+\s+)\S+/gi, '$1***');
+  if (token.length > 0) {
+    out = out.split(token).join('***');
+    out = out.split(Buffer.from(`x-access-token:${token}`).toString('base64')).join('***');
+  }
+  return out;
 }
 
 async function readPolicyFromRepo(

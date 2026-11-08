@@ -8,8 +8,9 @@ import { Command } from 'commander';
 import { DEFAULT_POLICY_PATH, runCheck } from './commands/check.js';
 import { fetchReviewState } from './github/review-state.js';
 import type { Approval, ReviewState } from './policy/evaluate.js';
-import { parsePolicy } from './policy/schema.js';
+import { parsePolicy, type Policy } from './policy/schema.js';
 import { collectProvenance } from './provenance/collect.js';
+import { git, revParse } from './provenance/git.js';
 
 const program = new Command();
 
@@ -25,6 +26,10 @@ program
   .option('-b, --base <ref>', 'base ref (merge-base semantics)', 'origin/main')
   .option('-h, --head <ref>', 'head ref', 'HEAD')
   .option('-p, --policy <path>', 'policy file, relative to the repo', DEFAULT_POLICY_PATH)
+  .option(
+    '--policy-ref <ref>',
+    'read the policy from this commit instead of the working tree; use the base so a pull request cannot edit its own policy',
+  )
   .option('--notes-ref <ref>', 'git notes ref holding authorship logs', 'refs/notes/ai')
   .option('-a, --approval <login[:team1,team2]>', 'an existing human approval (repeatable)', collect, [] as string[])
   .option('--bot-approval <login>', 'an existing approval from a bot account (repeatable)', collect, [] as string[])
@@ -34,12 +39,17 @@ program
   .option('--fail-on-warn', 'exit non-zero when the verdict is "warn"', false)
   .action(async (opts: CheckCliOptions) => {
     const repo = resolve(opts.repo);
-    const review = opts.github ? await reviewFromGitHub(opts, repo) : reviewFromFlags(opts);
+    const policyText = opts.policyRef
+      ? await git(repo, ['show', `${opts.policyRef}:${opts.policy}`])
+      : await readFile(resolve(repo, opts.policy), 'utf8');
+    const review = opts.github
+      ? await reviewFromGitHub(opts.github, parsePolicy(policyText), await revParse(repo, opts.head))
+      : reviewFromFlags(opts);
     const result = await runCheck({
       repo,
       base: opts.base,
       head: opts.head,
-      policyPath: opts.policy,
+      policyText,
       notesRef: opts.notesRef,
       review,
     });
@@ -108,6 +118,7 @@ interface CheckCliOptions {
   base: string;
   head: string;
   policy: string;
+  policyRef?: string;
   notesRef: string;
   approval: string[];
   botApproval: string[];
@@ -136,8 +147,8 @@ function reviewFromFlags(opts: CheckCliOptions): ReviewState {
   return { approvals, labels: opts.label };
 }
 
-async function reviewFromGitHub(opts: CheckCliOptions, repo: string): Promise<ReviewState> {
-  const match = /^([^/]+)\/([^#]+)#(\d+)$/.exec(opts.github ?? '');
+async function reviewFromGitHub(spec: string, policy: Policy, headSha: string): Promise<ReviewState> {
+  const match = /^([^/]+)\/([^#]+)#(\d+)$/.exec(spec);
   if (!match) {
     throw new Error('--github expects owner/repo#number');
   }
@@ -147,12 +158,11 @@ async function reviewFromGitHub(opts: CheckCliOptions, repo: string): Promise<Re
   }
   const { Octokit } = await import('@octokit/core');
   const octokit = new Octokit({ auth: token });
-  const policy = parsePolicy(await readFile(resolve(repo, opts.policy), 'utf8'));
   const teams = policy.rules.flatMap((rule) => rule.require?.teams ?? []);
   return fetchReviewState(
     octokit,
     { owner: match[1] ?? '', repo: match[2] ?? '', number: Number(match[3]) },
-    { teams },
+    { teams, headSha },
   );
 }
 

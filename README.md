@@ -102,7 +102,7 @@ See [`examples/github-actions.yml`](./examples/github-actions.yml). The workflow
 
 ## GitHub App
 
-`src/server.ts` runs a webhook server that, on pull request and review events, shallow-clones the repository with the installation token (including `refs/notes/ai`), reads `.provenance-policy.yml` from the PR head, fetches approvals and team memberships, evaluates the policy and publishes a `provenance-gate` Check Run with the full report. Required permissions: `checks: write`, `contents: read`, `pull_requests: read`, `metadata: read`, and `members: read` on the organization if you use `teams`. Subscribe to `pull_request` and `pull_request_review`.
+`src/server.ts` runs a webhook server that, on pull request and review events, shallow-clones the repository with the installation token (including `refs/notes/ai`), reads `.provenance-policy.yml` from the PR base (so a pull request cannot change the policy that judges it), fetches approvals left on the current head commit and team memberships, evaluates the policy and publishes a `provenance-gate` Check Run with the full report. Required permissions: `checks: write`, `contents: read`, `pull_requests: read`, `metadata: read`, and `members: read` on the organization if you use `teams`. Subscribe to `pull_request` and `pull_request_review`.
 
 ```bash
 APP_ID=... PRIVATE_KEY="$(cat key.pem)" WEBHOOK_SECRET=... node dist/server.js

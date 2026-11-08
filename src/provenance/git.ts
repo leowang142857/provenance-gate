@@ -15,9 +15,18 @@ export class GitError extends Error {
   }
 }
 
-export async function git(repo: string, args: string[]): Promise<string> {
+export interface GitOptions {
+  /** Extra environment variables. Use for secrets: unlike args, they never appear in GitError messages. */
+  env?: Record<string, string>;
+}
+
+export async function git(repo: string, args: string[], options: GitOptions = {}): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', args, { cwd: repo, maxBuffer: MAX_BUFFER });
+    const { stdout } = await execFileAsync('git', args, {
+      cwd: repo,
+      maxBuffer: MAX_BUFFER,
+      ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
+    });
     return stdout;
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: string };
@@ -60,8 +69,19 @@ export async function commitAuthor(repo: string, sha: string): Promise<string> {
 
 /** Files changed by a single commit. Merge commits yield no files (we only read their resolution via notes). */
 export async function commitChangedFiles(repo: string, sha: string): Promise<string[]> {
-  const out = await git(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]);
-  return out.split('\n').filter((line) => line.length > 0);
+  const out = await git(repo, ['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha]);
+  return out.split('\0').filter((path) => path.length > 0);
+}
+
+/** Environment that makes git send `Authorization: Basic x-access-token:<token>` to HTTPS remotes. */
+export function gitTokenEnv(token: string): Record<string, string> {
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+  return {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.extraHeader',
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
+    GIT_TERMINAL_PROMPT: '0',
+  };
 }
 
 export interface BlamedLine {
@@ -107,37 +127,70 @@ export async function blameRange(repo: string, from: string, to: string, path: s
   return lines;
 }
 
-function unquoteGitPath(path: string): string {
-  if (path.length >= 2 && path.startsWith('"') && path.endsWith('"')) {
-    return JSON.parse(path) as string;
+const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 };
+
+/** Decodes git's C-style quoted paths, including octal-escaped UTF-8 bytes (core.quotePath). */
+export function unquoteGitPath(path: string): string {
+  if (path.length < 2 || !path.startsWith('"') || !path.endsWith('"')) {
+    return path;
   }
-  return path;
+  const body = path.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i] ?? '';
+    if (ch !== '\\') {
+      bytes.push(...Buffer.from(ch, 'utf8'));
+      continue;
+    }
+    const next = body[i + 1] ?? '';
+    const octal = /^[0-7]{3}/.exec(body.slice(i + 1, i + 4));
+    if (octal) {
+      bytes.push(parseInt(octal[0], 8));
+      i += 3;
+    } else if (next in C_ESCAPES) {
+      bytes.push(C_ESCAPES[next] ?? 0);
+      i += 1;
+    } else {
+      bytes.push(92);
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
 }
 
 export interface NumstatEntry {
   path: string;
+  /** Source path when git detected a rename or copy. */
+  previousPath?: string;
   added: number;
   deleted: number;
 }
 
-/** Added / deleted line counts for every file between two commits. Binary files report 0/0. */
+/**
+ * Added / deleted line counts for every file between two commits, with rename detection so a
+ * moved file reports only the lines that actually changed. Binary files report 0/0.
+ */
 export async function diffNumstat(repo: string, from: string, to: string): Promise<NumstatEntry[]> {
-  const out = await git(repo, ['diff', '--numstat', '--no-renames', from, to]);
+  const out = await git(repo, ['diff', '--numstat', '-z', '-M', from, to]);
+  const fields = out.split('\0');
   const entries: NumstatEntry[] = [];
-  for (const line of out.split('\n')) {
-    if (line.length === 0) {
+  for (let i = 0; i < fields.length; i += 1) {
+    const field = fields[i] ?? '';
+    if (field.length === 0) {
       continue;
     }
-    const [added, deleted, ...rest] = line.split('\t');
-    const path = rest.join('\t');
-    if (!path) {
+    const [added = '-', deleted = '-', path = ''] = field.split('\t');
+    const counts = { added: added === '-' ? 0 : Number(added), deleted: deleted === '-' ? 0 : Number(deleted) };
+    if (path.length > 0) {
+      entries.push({ path, ...counts });
       continue;
     }
-    entries.push({
-      path,
-      added: added === '-' ? 0 : Number(added),
-      deleted: deleted === '-' ? 0 : Number(deleted),
-    });
+    // Renames are written as "added\tdeleted\t\0old\0new\0".
+    const previousPath = fields[i + 1] ?? '';
+    const newPath = fields[i + 2] ?? '';
+    i += 2;
+    if (newPath.length > 0) {
+      entries.push({ path: newPath, previousPath, ...counts });
+    }
   }
   return entries;
 }

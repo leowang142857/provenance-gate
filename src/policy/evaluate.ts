@@ -154,7 +154,9 @@ function matchRule(rule: PolicyRule, provenance: ChangeProvenance, scoped: Scope
 
   if (when.paths) {
     const isMatch = picomatch(when.paths, { dot: true });
-    const candidates = scoped.filter((s) => isMatch(s.file.path));
+    const candidates = scoped.filter(
+      (s) => isMatch(s.file.path) || (s.file.previousPath !== undefined && isMatch(s.file.previousPath)),
+    );
     const hits = candidates.filter((s) => {
       if (when.ai_share_gte !== undefined && s.effectiveShare < when.ai_share_gte) return false;
       if (when.ai_share_lt !== undefined && s.effectiveShare >= when.ai_share_lt) return false;
@@ -189,11 +191,13 @@ function matchRule(rule: PolicyRule, provenance: ChangeProvenance, scoped: Scope
  * Share of the file's surviving added lines that count as AI:
  *   AI-attested lines + lines from commits with only an agent trailer
  *   + lines from commits with no signal, unless the policy treats those as human.
- * Deletion-only changes have no surviving lines, so they fall back to the file's confidence.
+ * Deletions and pure renames have no attributable lines, so they fall back to the file's
+ * confidence and to whether an agent touched the file (see FileProvenance.aiShare).
  */
 export function effectiveFileShare(file: FileProvenance, policy: Policy): number {
   const unknownCountsAsAi = policy.defaults.unknown_provenance !== 'treat-as-human';
-  if (file.addedLines === 0) {
+  const attributed = file.aiLines + file.humanLines + file.assumedAiLines + file.unknownLines;
+  if (file.addedLines === 0 || attributed === 0) {
     if (file.confidence === 'commit-level') return 1;
     if (file.confidence === 'unknown') return unknownCountsAsAi ? 1 : 0;
     return file.aiShare;

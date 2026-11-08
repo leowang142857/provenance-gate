@@ -39,12 +39,15 @@
 
 **Merge-base semantics.** Provenance is computed for `merge-base(base, head)..head`, the same diff a pull request shows, so a moving base branch never changes the verdict.
 
+**The change under review never configures its own gate.** The App reads the policy from the base commit and the Actions example passes `--policy-ref <base sha>`; only approvals left on the current head commit count.
+
 **Two deployment shapes.** The CLI runs anywhere (Actions, GitLab CI, locally) with zero infrastructure. The App adds Check Runs and automatic labels for teams that want a required status without a workflow file.
 
 ## Known approximations
 
 - Per-file attribution uses `git blame merge-base..head`: each surviving line maps to the commit and original line number that introduced it, which is then looked up in that commit's authorship log. Git's blame heuristics decide which commit "owns" an unchanged line of text; this matches `git-ai blame` on real repositories, but identical lines moved within a file can be credited to the earlier commit.
 - Merge commits contribute no changed files (we rely on their notes only), so conflict-resolution lines are only attributed when git-ai recorded them.
+- Deletions and pure renames have no surviving lines to blame. They count as fully AI when any commit that touched the file (under either name) involved an agent, which is conservative for mixed commits.
 - Approvals are matched by login; team membership is resolved only for teams named in the policy.
 
 ## Roadmap
