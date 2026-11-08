@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { evaluatePullRequest, redact } from '../src/github/app.js';
+import { evaluatePullRequest, redact, writeRemoteAuth } from '../src/github/app.js';
 import { fetchReviewState, type MinimalOctokit } from '../src/github/review-state.js';
 import { evaluatePolicy } from '../src/policy/evaluate.js';
 import { parsePolicy } from '../src/policy/schema.js';
 import { collectProvenance } from '../src/provenance/collect.js';
-import { gitTokenEnv, unquoteGitPath } from '../src/provenance/git.js';
+import { unquoteGitPath } from '../src/provenance/git.js';
 import { GitFixture, authorshipNote, lines } from './helpers/git-fixture.js';
 
 const AGENT_TRAILER = 'Co-authored-by: Claude <noreply@anthropic.com>';
@@ -143,13 +143,24 @@ describe('GitHub App', () => {
     expect(contents?.params?.['ref']).toBe('basesha');
   });
 
-  it('never puts the installation token in git arguments or check run output', () => {
+  it('stores the token in the clone config, where lazy blob fetches can use it', async () => {
+    const fixture = await GitFixture.create();
+    try {
+      await writeRemoteAuth(fixture.dir, 'ghs_secretsecretsecret');
+      const header = await fixture.git('config', '--get', 'http.extraHeader');
+      const encoded = header.replace('Authorization: Basic ', '');
+      expect(Buffer.from(encoded, 'base64').toString('utf8')).toBe('x-access-token:ghs_secretsecretsecret');
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it('redacts credentials from check run output', () => {
     const token = 'ghs_secretsecretsecret';
-    const env = gitTokenEnv(token);
-    expect(Object.values(env).join(' ')).not.toContain(token);
-    const leaked = `git fetch https://x-access-token:${token}@github.com/o/r.git failed\n${env['GIT_CONFIG_VALUE_0']}`;
+    const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+    const leaked = `git fetch https://x-access-token:${token}@github.com/o/r.git failed\nAuthorization: Basic ${basic}`;
     const cleaned = redact(leaked, token);
     expect(cleaned).not.toContain(token);
-    expect(cleaned).not.toContain(env['GIT_CONFIG_VALUE_0']?.split(' ').pop());
+    expect(cleaned).not.toContain(basic);
   });
 });

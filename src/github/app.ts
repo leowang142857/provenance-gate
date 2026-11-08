@@ -7,14 +7,14 @@
  *   3. fetch approvals and labels
  *   4. evaluate the policy and publish a Check Run that can be marked "required" in branch protection
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { App } from '@octokit/app';
 
 import { runCheck } from '../commands/check.js';
-import { git, gitTokenEnv } from '../provenance/git.js';
+import { git } from '../provenance/git.js';
 import { parsePolicy } from '../policy/schema.js';
 import { summaryLine } from '../report/markdown.js';
 import { fetchReviewState, type MinimalOctokit } from './review-state.js';
@@ -142,12 +142,12 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
   let token = '';
   try {
     token = ((await octokit.auth({ type: 'installation' })) as { token: string }).token;
-    const auth = { env: gitTokenEnv(token) };
     await git(workdir, ['init', '--quiet']);
     await git(workdir, ['remote', 'add', 'origin', input.cloneUrl]);
-    await git(workdir, ['fetch', '--quiet', '--filter=blob:none', 'origin', pull.base.sha, pull.head.sha], auth);
+    await writeRemoteAuth(workdir, token);
+    await git(workdir, ['fetch', '--quiet', '--filter=blob:none', 'origin', pull.base.sha, pull.head.sha]);
     try {
-      await git(workdir, ['fetch', '--quiet', 'origin', '+refs/notes/ai:refs/notes/ai'], auth);
+      await git(workdir, ['fetch', '--quiet', 'origin', '+refs/notes/ai:refs/notes/ai']);
     } catch {
       // Repository has no authorship notes yet; commit trailers are the only signal.
     }
@@ -186,6 +186,16 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
   } finally {
     await rm(workdir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Stores the installation token in the throwaway clone's own config. It must live there rather than in
+ * per-command env: the partial clone lazily fetches blobs during blame and diff, long after the fetch
+ * call. Writing the file directly keeps the token out of process arguments and GitError messages.
+ */
+export async function writeRemoteAuth(workdir: string, token: string): Promise<void> {
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+  await appendFile(join(workdir, '.git', 'config'), `[http]\n\textraHeader = Authorization: Basic ${basic}\n`, 'utf8');
 }
 
 /** Check Run output is visible to anyone who can read the repository; never echo credentials into it. */

@@ -15,18 +15,9 @@ export class GitError extends Error {
   }
 }
 
-export interface GitOptions {
-  /** Extra environment variables. Use for secrets: unlike args, they never appear in GitError messages. */
-  env?: Record<string, string>;
-}
-
-export async function git(repo: string, args: string[], options: GitOptions = {}): Promise<string> {
+export async function git(repo: string, args: string[]): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', args, {
-      cwd: repo,
-      maxBuffer: MAX_BUFFER,
-      ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
-    });
+    const { stdout } = await execFileAsync('git', args, { cwd: repo, maxBuffer: MAX_BUFFER });
     return stdout;
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: string };
@@ -71,17 +62,6 @@ export async function commitAuthor(repo: string, sha: string): Promise<string> {
 export async function commitChangedFiles(repo: string, sha: string): Promise<string[]> {
   const out = await git(repo, ['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha]);
   return out.split('\0').filter((path) => path.length > 0);
-}
-
-/** Environment that makes git send `Authorization: Basic x-access-token:<token>` to HTTPS remotes. */
-export function gitTokenEnv(token: string): Record<string, string> {
-  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
-  return {
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'http.extraHeader',
-    GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
-    GIT_TERMINAL_PROMPT: '0',
-  };
 }
 
 export interface BlamedLine {
