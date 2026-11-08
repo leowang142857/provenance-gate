@@ -1,0 +1,43 @@
+{
+  "name": "provenance-gate",
+  "version": "0.1.0",
+  "description": "Merge-policy enforcement driven by AI code provenance. Branch protection that understands who, or what, wrote the code.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "provenance-gate": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "policies"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "server": "node dist/server.js"
+  },
+  "dependencies": {
+    "@octokit/app": "^16.0.1",
+    "@octokit/core": "^7.0.8",
+    "@octokit/webhooks": "^14.0.0",
+    "commander": "^14.0.0",
+    "picomatch": "^4.0.2",
+    "yaml": "^2.8.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/picomatch": "^4.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}
