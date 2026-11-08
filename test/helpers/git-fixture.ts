@@ -6,6 +6,10 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
+// Ignore user/system git config so tools hooked into git (e.g. git-ai's trace2 daemon)
+// cannot attach their own notes to fixture commits.
+const HERMETIC_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+
 export class GitFixture {
   private constructor(public readonly dir: string) {}
 
@@ -20,7 +24,7 @@ export class GitFixture {
   }
 
   async git(...args: string[]): Promise<string> {
-    const { stdout } = await execFileAsync('git', args, { cwd: this.dir });
+    const { stdout } = await execFileAsync('git', args, { cwd: this.dir, env: HERMETIC_ENV });
     return stdout.trim();
   }
 
@@ -42,7 +46,7 @@ export class GitFixture {
   async addNote(sha: string, note: string, ref = 'ai'): Promise<void> {
     const notePath = join(this.dir, '..', `note-${sha.slice(0, 8)}.txt`);
     await writeFile(notePath, note, 'utf8');
-    await this.git('notes', `--ref=${ref}`, 'add', '-F', notePath, sha);
+    await this.git('notes', `--ref=${ref}`, 'add', '-f', '-F', notePath, sha);
     await rm(notePath, { force: true });
   }
 
