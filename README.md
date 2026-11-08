@@ -2,8 +2,6 @@
 
 Merge-policy enforcement driven by AI code provenance. Branch protection that understands who, or what, wrote the code.
 
-[中文说明](./README.zh-CN.md)
-
 ## Why
 
 More than 40% of pull requests on GitHub now start with an agent, and agent-written PRs merge faster than human ones. Tools such as [git-ai](https://github.com/git-ai-project/git-ai) already record *which lines* an agent wrote, with which model and prompt. Nothing enforces anything based on that record.

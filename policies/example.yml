@@ -1,5 +1,5 @@
 # provenance-gate policy
-# Docs: https://github.com/leowang142857/Github-Searching-Developing
+# Docs: https://github.com/leowang142857/provenance-gate
 #
 # Rules are evaluated against the provenance of a pull request:
 #   - line-level attribution from git-ai authorship logs (refs/notes/ai)

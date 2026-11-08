@@ -33,7 +33,7 @@ jobs:
       # Until provenance-gate is on npm, build it from source:
       - name: Install provenance-gate
         run: |
-          git clone --depth 1 https://github.com/leowang142857/Github-Searching-Developing /tmp/provenance-gate
+          git clone --depth 1 https://github.com/leowang142857/provenance-gate /tmp/provenance-gate
           cd /tmp/provenance-gate && npm install -g pnpm && pnpm install --frozen-lockfile && pnpm build
 
       - name: Evaluate policy

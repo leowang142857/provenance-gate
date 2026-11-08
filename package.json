@@ -4,6 +4,23 @@
   "description": "Merge-policy enforcement driven by AI code provenance. Branch protection that understands who, or what, wrote the code.",
   "type": "module",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leowang142857/provenance-gate.git"
+  },
+  "homepage": "https://github.com/leowang142857/provenance-gate#readme",
+  "bugs": {
+    "url": "https://github.com/leowang142857/provenance-gate/issues"
+  },
+  "keywords": [
+    "ai",
+    "provenance",
+    "git-ai",
+    "code-review",
+    "branch-protection",
+    "github-app",
+    "coding-agents"
+  ],
   "engines": {
     "node": ">=20"
   },
