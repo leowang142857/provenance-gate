@@ -1,0 +1,60 @@
+# provenance-gate policy
+# Docs: https://github.com/leowang142857/Github-Searching-Developing
+#
+# Rules are evaluated against the provenance of a pull request:
+#   - line-level attribution from git-ai authorship logs (refs/notes/ai)
+#   - commit-level agent trailers (Co-authored-by: Claude <noreply@anthropic.com>, Agent: codex, ...)
+#
+# A rule with `paths` is evaluated per matching file; a rule without `paths` is
+# evaluated against the whole change. `ai_share_*` is the fraction of added lines
+# attributed to AI. Lines with no provenance are treated according to
+# `defaults.unknown_provenance`.
+
+version: 1
+
+defaults:
+  # treat-as-ai (default) | treat-as-human | block
+  unknown_provenance: treat-as-ai
+  count_bot_approvals: false
+
+rules:
+  - name: sensitive-paths-need-two-humans
+    description: Any AI-touched change to auth, payments or database migrations needs two human approvals, one from security.
+    when:
+      paths:
+        - "src/auth/**"
+        - "src/payments/**"
+        - "**/migrations/**"
+        - "**/*.sql"
+      ai_share_gte: 0.0001
+    require:
+      human_approvals: 2
+      teams: ["security"]
+      labels: ["ai-touched-sensitive-path"]
+
+  - name: ci-and-secrets-are-human-only
+    description: Agents may not change CI definitions or secret handling without a human rewriting the diff.
+    when:
+      paths:
+        - ".github/**"
+        - "**/*.env*"
+        - "**/secrets/**"
+      ai_share_gte: 0.5
+    action: block
+    message: CI, environment and secret files must be authored by a human.
+
+  - name: mostly-ai-changes-need-a-reviewer
+    description: Changes that are at least 80% AI-written need one explicit human approval.
+    when:
+      ai_share_gte: 0.8
+      min_changed_lines: 20
+    require:
+      human_approvals: 1
+      labels: ["ai-heavy"]
+
+  - name: untracked-provenance-is-visible
+    description: Surface commits that carry no provenance signal at all so reviewers know what they are looking at.
+    when:
+      provenance_missing: true
+    action: warn
+    message: Some commits have no provenance record. Install git-ai or add agent trailers so this check can reason about them.

@@ -1,0 +1,29 @@
+# provenance-gate's own policy (dogfooding). Evaluate with:
+#   node dist/cli.js check --base origin/main --head HEAD
+version: 1
+
+defaults:
+  unknown_provenance: treat-as-ai
+  count_bot_approvals: false
+
+rules:
+  - name: github-integration-needs-a-human
+    description: Anything an agent writes under src/github touches tokens and check-run publishing; a human must approve it.
+    when:
+      paths: ["src/github/**", "src/server.ts"]
+      ai_share_gte: 0.0001
+    require:
+      human_approvals: 1
+      labels: ["ai-touched-integration"]
+
+  - name: workflows-are-human-only
+    when:
+      paths: [".github/**"]
+      ai_share_gte: 0.5
+    action: block
+    message: CI workflows must be authored by a human.
+
+  - name: surface-untracked-commits
+    when:
+      provenance_missing: true
+    action: warn

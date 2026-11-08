@@ -1,0 +1,48 @@
+# Copy to .github/workflows/provenance-gate.yml in the repository you want to protect,
+# then mark the "gate" job as a required status check in branch protection.
+name: provenance-gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch authorship notes and base
+        run: |
+          git fetch origin '+refs/notes/ai:refs/notes/ai' || echo "no authorship notes in this repository"
+          git fetch origin ${{ github.event.pull_request.base.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Until provenance-gate is on npm, build it from source:
+      - name: Install provenance-gate
+        run: |
+          git clone --depth 1 https://github.com/leowang142857/Github-Searching-Developing /tmp/provenance-gate
+          cd /tmp/provenance-gate && npm install -g pnpm && pnpm install --frozen-lockfile && pnpm build
+
+      - name: Evaluate policy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node /tmp/provenance-gate/dist/cli.js check \
+            --base ${{ github.event.pull_request.base.sha }} \
+            --head ${{ github.event.pull_request.head.sha }} \
+            --github ${{ github.repository }}#${{ github.event.pull_request.number }} \
+            | tee "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
