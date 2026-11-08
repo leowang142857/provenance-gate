@@ -136,3 +136,62 @@ describe('collectProvenance against a real repository', () => {
     expect(prov.stats.none).toBe(2);
   });
 });
+
+describe('collectProvenance counts only lines that survive to head', () => {
+  let fixture: GitFixture;
+
+  beforeAll(async () => {
+    fixture = await GitFixture.create();
+    await fixture.commit('initial', { 'README.md': '# demo\n' });
+    await fixture.git('checkout', '--quiet', '-b', 'feature');
+  });
+
+  afterAll(async () => {
+    await fixture.cleanup();
+  });
+
+  it('credits a human rewrite of agent-written lines to the human', async () => {
+    const agentVersion = ['name: deploy', 'on: push', 'jobs:', '  deploy:', '    runs-on: ubuntu-latest', '    steps:', '      - run: ./deploy.sh', '        env: { TOKEN: x }', '      - run: echo done'];
+    const a = await fixture.commit('ci: agent adds deploy', { '.github/workflows/deploy.yml': `${agentVersion.join('\n')}\n` });
+    await fixture.addNote(
+      a,
+      authorshipNote([{ path: '.github/workflows/deploy.yml', entries: ['s_aaaaaaaaaaaaaa::t_bbbbbbbbbbbbbb 1-9'] }], {
+        sessions: { s_aaaaaaaaaaaaaa: { agent_id: { tool: 'claude', id: 'c', model: 'unknown' } } },
+      }),
+    );
+
+    // Human keeps lines 1-6, replaces the last three with five new lines.
+    const humanVersion = [...agentVersion.slice(0, 6), '      - uses: actions/checkout@v4', '      - run: ./deploy.sh', '        env:', '          TOKEN: ${{ secrets.TOKEN }}', '    environment: production'];
+    const b = await fixture.commit('ci: human hardens deploy', { '.github/workflows/deploy.yml': `${humanVersion.join('\n')}\n` });
+    await fixture.addNote(
+      b,
+      authorshipNote([{ path: '.github/workflows/deploy.yml', entries: ['h_cccccccccccccc 7,9-11'] }], {
+        humans: { h_cccccccccccccc: { author: 'Test User <test@example.com>' } },
+      }),
+    );
+
+    const prov = await collectProvenance({ repo: fixture.dir, base: 'main', head: 'feature' });
+    const deploy = prov.files.find((f) => f.path === '.github/workflows/deploy.yml')!;
+    expect(deploy.addedLines).toBe(11);
+    // Lines 1-6 survive from the agent commit; line 8 ("- run: ./deploy.sh") is unchanged text that blame
+    // also attributes to the agent commit. Lines 7 and 9-11 are the human's.
+    expect(deploy.aiLines).toBe(7);
+    expect(deploy.humanLines).toBe(4);
+    expect(deploy.aiShare).toBeCloseTo(7 / 11);
+    expect(deploy.agents).toEqual([{ tool: 'claude' }]);
+    // Summing per-commit logs would have reported 9 AI lines.
+    expect(prov.commits[0]!.files[0]!.aiLines).toBe(9);
+  });
+
+  it('counts only the surviving lines of trailer-only and untracked commits', async () => {
+    await fixture.commit('feat: agent drafts module\n\nCo-authored-by: Claude <noreply@anthropic.com>', {
+      'src/mod.ts': 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\nexport const d = 4;\n',
+    });
+    await fixture.commit('refactor: human trims module', { 'src/mod.ts': 'export const a = 1;\nexport const z = 26;\n' });
+
+    const prov = await collectProvenance({ repo: fixture.dir, base: 'main', head: 'feature' });
+    const mod = prov.files.find((f) => f.path === 'src/mod.ts')!;
+    expect(mod).toMatchObject({ addedLines: 2, assumedAiLines: 1, unknownLines: 1, aiLines: 0, confidence: 'unknown', assumedAi: true });
+    expect(mod.agents).toEqual([{ tool: 'claude' }]);
+  });
+});

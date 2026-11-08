@@ -58,7 +58,9 @@ export function renderMarkdown(provenance: ChangeProvenance, verdict: Verdict): 
     `${provenance.stats.commits} commit(s): ${provenance.stats.exact} with line-level attribution, ${provenance.stats.commitLevel} with commit-level agent trailers, ${provenance.stats.none} with no provenance signal.`,
   );
   out.push('');
-  out.push('<sub>Line-level data is read from git-ai authorship logs (refs/notes/ai). Shares are estimates relative to added lines.</sub>');
+  out.push(
+    '<sub>Each surviving line is blamed to the commit that introduced it and looked up in that commit\'s git-ai authorship log (refs/notes/ai). Lines from commits with only an agent trailer count as AI.</sub>',
+  );
   return out.join('\n');
 }
 
@@ -69,13 +71,15 @@ export function summaryLine(provenance: ChangeProvenance, verdict: Verdict): str
 }
 
 function formatShare(file: FileProvenance): string {
+  const exact = `${Math.round(file.aiShare * 100)}%`;
   if (file.confidence === 'exact') {
-    return `${Math.round(file.aiShare * 100)}%`;
+    return exact;
   }
-  if (file.confidence === 'commit-level') {
-    return 'n/a';
-  }
-  return file.aiLines > 0 ? `${Math.round(file.aiShare * 100)}%*` : 'unknown';
+  const extras = [
+    file.assumedAiLines > 0 ? `+${file.assumedAiLines} via trailer` : '',
+    file.unknownLines > 0 ? `+${file.unknownLines} untracked` : '',
+  ].filter((s) => s.length > 0);
+  return extras.length > 0 ? `${exact} ${extras.join(', ')}` : exact;
 }
 
 function byInterest(a: FileProvenance, b: FileProvenance): number {

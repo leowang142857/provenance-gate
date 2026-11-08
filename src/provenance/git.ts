@@ -64,6 +64,56 @@ export async function commitChangedFiles(repo: string, sha: string): Promise<str
   return out.split('\n').filter((line) => line.length > 0);
 }
 
+export interface BlamedLine {
+  /** Commit that introduced the line. */
+  sha: string;
+  /** Line number in that commit's version of the file. */
+  origLine: number;
+  /** Path of the file in that commit (differs from the head path after renames). */
+  origPath: string;
+  /** True when the line predates `from` (unchanged by the range). */
+  boundary: boolean;
+}
+
+/**
+ * Blames every line of `path` at `to`, limited to commits in `from..to`.
+ * Lines older than the range are marked `boundary`.
+ */
+export async function blameRange(repo: string, from: string, to: string, path: string): Promise<BlamedLine[]> {
+  const out = await git(repo, ['blame', '--line-porcelain', `${from}..${to}`, '--', path]);
+  const lines: BlamedLine[] = [];
+  let current: BlamedLine | undefined;
+  for (const line of out.split('\n')) {
+    if (line.startsWith('\t')) {
+      if (current) {
+        lines.push(current);
+      }
+      current = undefined;
+      continue;
+    }
+    if (!current) {
+      const [sha, origLine] = line.split(' ');
+      if (sha && /^[0-9a-f]{40,64}$/.test(sha)) {
+        current = { sha, origLine: Number(origLine), origPath: path, boundary: false };
+      }
+      continue;
+    }
+    if (line === 'boundary') {
+      current.boundary = true;
+    } else if (line.startsWith('filename ')) {
+      current.origPath = unquoteGitPath(line.slice('filename '.length));
+    }
+  }
+  return lines;
+}
+
+function unquoteGitPath(path: string): string {
+  if (path.length >= 2 && path.startsWith('"') && path.endsWith('"')) {
+    return JSON.parse(path) as string;
+  }
+  return path;
+}
+
 export interface NumstatEntry {
   path: string;
   added: number;

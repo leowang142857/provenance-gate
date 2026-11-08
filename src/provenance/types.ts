@@ -38,19 +38,27 @@ export interface CommitProvenance {
   humanAuthors: string[];
 }
 
+/**
+ * Line counts describe lines that exist in the head version of the file and were
+ * introduced inside the range (git blame), so rewritten or deleted lines are not counted.
+ */
 export interface FileProvenance {
   path: string;
   addedLines: number;
   deletedLines: number;
-  /** Lines attributed to an AI session via line-level logs. */
+  /** Surviving lines attributed to an AI session via line-level logs. */
   aiLines: number;
-  /** Lines attributed to a known human via line-level logs. */
+  /** Surviving lines attributed to a known human via line-level logs. */
   humanLines: number;
-  /** aiLines / addedLines, clamped to [0, 1]. Only meaningful when confidence is `exact`. */
+  /** Surviving lines from commits that only carry a commit-level agent signal. */
+  assumedAiLines: number;
+  /** Surviving lines from commits with no provenance signal at all. */
+  unknownLines: number;
+  /** aiLines / addedLines, clamped to [0, 1]. */
   aiShare: number;
-  /** Worst-case confidence across every commit in the range that touched this file. */
+  /** Worst-case confidence across the commits that contributed surviving lines (or touched the file, for deletions). */
   confidence: Confidence;
-  /** True when at least one commit touching this file had only a commit-level AI signal. */
+  /** True when some surviving lines come from a commit with only a commit-level agent signal. */
   assumedAi: boolean;
   agents: AgentId[];
 }
@@ -66,6 +74,8 @@ export interface ChangeProvenance {
     deletedLines: number;
     aiLines: number;
     humanLines: number;
+    assumedAiLines: number;
+    unknownLines: number;
     /** Exact-attribution share across the whole change: aiLines / addedLines, clamped. */
     aiShare: number;
   };

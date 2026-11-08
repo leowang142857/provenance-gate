@@ -10,6 +10,8 @@ function file(partial: Partial<FileProvenance> & { path: string }): FileProvenan
     deletedLines: 0,
     aiLines: 0,
     humanLines: 0,
+    assumedAiLines: 0,
+    unknownLines: 0,
     aiShare: 0,
     confidence: 'exact',
     assumedAi: false,
@@ -32,6 +34,8 @@ function change(files: FileProvenance[], extra: Partial<ChangeProvenance> = {}):
       deletedLines: files.reduce((s, f) => s + f.deletedLines, 0),
       aiLines,
       humanLines: 0,
+      assumedAiLines: files.reduce((s, f) => s + f.assumedAiLines, 0),
+      unknownLines: files.reduce((s, f) => s + f.unknownLines, 0),
       aiShare: addedLines === 0 ? 0 : Math.min(1, aiLines / addedLines),
     },
     agents: [...new Map(files.flatMap((f) => f.agents).map((a) => [a.tool, a])).values()],
@@ -153,14 +157,14 @@ rules:
   });
 
   it('treats commit-level agent signals as fully AI', () => {
-    const prov = change([file({ path: 'src/auth/x.ts', addedLines: 10, confidence: 'commit-level', assumedAi: true })]);
+    const prov = change([file({ path: 'src/auth/x.ts', addedLines: 10, assumedAiLines: 10, confidence: 'commit-level', assumedAi: true })]);
     const verdict = evaluatePolicy(POLICY, prov, { approvals: [] });
     expect(verdict.results.find((r) => r.rule === 'sensitive')!.status).toBe('fail');
     expect(verdict.effectiveAiShare).toBe(1);
   });
 
   it('applies defaults.unknown_provenance', () => {
-    const prov = change([file({ path: 'src/auth/x.ts', addedLines: 10, confidence: 'unknown' })], {
+    const prov = change([file({ path: 'src/auth/x.ts', addedLines: 10, unknownLines: 10, confidence: 'unknown' })], {
       stats: { commits: 1, exact: 0, commitLevel: 0, none: 1 },
       commits: [{ sha: 'deadbeefcafe', source: 'none', confidence: 'unknown', files: [], changedFiles: ['src/auth/x.ts'], agents: [], humanAuthors: [] }],
     });

@@ -186,18 +186,20 @@ function matchRule(rule: PolicyRule, provenance: ChangeProvenance, scoped: Scope
 }
 
 /**
- * exact        -> measured share
- * commit-level -> 1 (an agent touched the commit; we cannot narrow it down)
- * unknown      -> policy default
+ * Share of the file's surviving added lines that count as AI:
+ *   AI-attested lines + lines from commits with only an agent trailer
+ *   + lines from commits with no signal, unless the policy treats those as human.
+ * Deletion-only changes have no surviving lines, so they fall back to the file's confidence.
  */
 export function effectiveFileShare(file: FileProvenance, policy: Policy): number {
-  if (file.confidence === 'exact') {
+  const unknownCountsAsAi = policy.defaults.unknown_provenance !== 'treat-as-human';
+  if (file.addedLines === 0) {
+    if (file.confidence === 'commit-level') return 1;
+    if (file.confidence === 'unknown') return unknownCountsAsAi ? 1 : 0;
     return file.aiShare;
   }
-  if (file.confidence === 'commit-level') {
-    return 1;
-  }
-  return policy.defaults.unknown_provenance === 'treat-as-human' ? file.aiShare : 1;
+  const aiLike = file.aiLines + file.assumedAiLines + (unknownCountsAsAi ? file.unknownLines : 0);
+  return Math.min(1, aiLike / file.addedLines);
 }
 
 function weightedShare(files: ScopedFile[]): number {

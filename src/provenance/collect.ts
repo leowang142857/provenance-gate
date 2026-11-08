@@ -1,5 +1,6 @@
-import { isAuthorshipLog, parseAuthorshipLog } from './gitai.js';
+import { isAuthorshipLog, parseAuthorshipLog, type AuthorshipEntry } from './gitai.js';
 import {
+  blameRange,
   commitChangedFiles,
   commitMessage,
   diffNumstat,
@@ -28,24 +29,30 @@ export interface CollectOptions {
   notesRef?: string;
 }
 
+interface CommitRecord {
+  provenance: CommitProvenance;
+  /** Authorship entries per path, as written in that commit's log. */
+  entries: Map<string, AuthorshipEntry[]>;
+}
+
 interface FileAccumulator {
   aiLines: number;
   humanLines: number;
+  assumedAiLines: number;
+  unknownLines: number;
+  blamedLines: number;
   agents: Map<string, AgentId>;
-  touchedBy: number;
-  exactCommits: number;
-  commitLevelCommits: number;
-  unknownCommits: number;
+  confidences: Set<Confidence>;
 }
 
 /**
  * Builds a provenance picture for everything that `head` adds on top of `base`
  * (merge-base semantics, the same diff a pull request shows).
  *
- * Line counts from authorship logs are summed per file across commits. Because each
- * log describes line numbers at its own commit, a line rewritten by two sessions is
- * counted twice; `aiShare` is therefore an estimate clamped to [0, 1], not an exact
- * blame. It is accurate enough to gate on and errs on the side of reporting more AI.
+ * Every line of each changed file at `head` is blamed back to the commit in the range
+ * that introduced it, then looked up in that commit's authorship log. Shares therefore
+ * describe the code that will actually merge: lines an agent wrote and a human later
+ * rewrote count as human.
  */
 export async function collectProvenance(options: CollectOptions): Promise<ChangeProvenance> {
   const notesRef = options.notesRef ?? DEFAULT_NOTES_REF;
@@ -53,63 +60,84 @@ export async function collectProvenance(options: CollectOptions): Promise<Change
   const headSha = await revParse(options.repo, options.head);
   const mb = await mergeBase(options.repo, baseSha, headSha);
 
-  const commits: CommitProvenance[] = [];
-  const files = new Map<string, FileAccumulator>();
+  const records = new Map<string, CommitRecord>();
+  const touchedBy = new Map<string, Set<Confidence>>();
   const allAgents = new Map<string, AgentId>();
   const stats = { commits: 0, exact: 0, commitLevel: 0, none: 0 };
 
   for (const sha of await listCommits(options.repo, mb, headSha)) {
-    const commit = await describeCommit(options.repo, sha, notesRef);
-    commits.push(commit);
+    const record = await describeCommit(options.repo, sha, notesRef);
+    records.set(sha, record);
     stats.commits += 1;
-    stats[confidenceBucket(commit.confidence)] += 1;
-    mergeAgents(allAgents, commit.agents);
-
-    if (commit.confidence === 'exact') {
-      for (const file of commit.files) {
-        const acc = accumulator(files, file.path);
-        acc.aiLines += file.aiLines;
-        acc.humanLines += file.humanLines;
-        mergeAgents(acc.agents, file.agents);
+    stats[confidenceBucket(record.provenance.confidence)] += 1;
+    for (const path of record.provenance.changedFiles) {
+      let set = touchedBy.get(path);
+      if (!set) {
+        set = new Set();
+        touchedBy.set(path, set);
       }
-    }
-    for (const path of commit.changedFiles) {
-      const acc = accumulator(files, path);
-      acc.touchedBy += 1;
-      if (commit.confidence === 'exact') {
-        acc.exactCommits += 1;
-      } else if (commit.confidence === 'commit-level') {
-        acc.commitLevelCommits += 1;
-        mergeAgents(acc.agents, commit.agents);
-      } else {
-        acc.unknownCommits += 1;
-      }
+      set.add(record.provenance.confidence);
     }
   }
 
   const numstat = await diffNumstat(options.repo, mb, headSha);
-  const fileProvenance: FileProvenance[] = [];
-  const totals = { addedLines: 0, deletedLines: 0, aiLines: 0, humanLines: 0, aiShare: 0 };
+  const files: FileProvenance[] = [];
+  const totals = { addedLines: 0, deletedLines: 0, aiLines: 0, humanLines: 0, assumedAiLines: 0, unknownLines: 0, aiShare: 0 };
 
   for (const entry of numstat) {
-    const acc = files.get(entry.path);
-    const aiLines = acc?.aiLines ?? 0;
-    const humanLines = acc?.humanLines ?? 0;
-    totals.addedLines += entry.added;
-    totals.deletedLines += entry.deleted;
-    totals.aiLines += aiLines;
-    totals.humanLines += humanLines;
-    fileProvenance.push({
+    const acc: FileAccumulator = {
+      aiLines: 0,
+      humanLines: 0,
+      assumedAiLines: 0,
+      unknownLines: 0,
+      blamedLines: 0,
+      agents: new Map(),
+      confidences: new Set(),
+    };
+
+    if (entry.added > 0) {
+      for (const line of await blameRange(options.repo, mb, headSha, entry.path)) {
+        const record = line.boundary ? undefined : records.get(line.sha);
+        if (!record) {
+          continue;
+        }
+        acc.blamedLines += 1;
+        attributeLine(acc, record, line.origPath, line.origLine);
+      }
+    }
+    if (acc.confidences.size === 0) {
+      // Deletion-only (or binary) change: fall back to the commits that touched the file.
+      for (const confidence of touchedBy.get(entry.path) ?? []) {
+        acc.confidences.add(confidence);
+      }
+      for (const record of records.values()) {
+        if (record.provenance.confidence === 'commit-level' && record.provenance.changedFiles.includes(entry.path)) {
+          mergeAgents(acc.agents, record.provenance.agents);
+        }
+      }
+    }
+    mergeAgents(allAgents, acc.agents.values());
+
+    const denominator = Math.max(acc.blamedLines, entry.added);
+    files.push({
       path: entry.path,
       addedLines: entry.added,
       deletedLines: entry.deleted,
-      aiLines,
-      humanLines,
-      aiShare: share(aiLines, entry.added),
-      confidence: fileConfidence(acc),
-      assumedAi: (acc?.commitLevelCommits ?? 0) > 0,
-      agents: [...(acc?.agents.values() ?? [])],
+      aiLines: acc.aiLines,
+      humanLines: acc.humanLines,
+      assumedAiLines: acc.assumedAiLines,
+      unknownLines: acc.unknownLines,
+      aiShare: share(acc.aiLines, denominator),
+      confidence: worst(acc.confidences),
+      assumedAi: acc.assumedAiLines > 0 || (entry.added === 0 && acc.confidences.has('commit-level')),
+      agents: [...acc.agents.values()],
     });
+    totals.addedLines += entry.added;
+    totals.deletedLines += entry.deleted;
+    totals.aiLines += acc.aiLines;
+    totals.humanLines += acc.humanLines;
+    totals.assumedAiLines += acc.assumedAiLines;
+    totals.unknownLines += acc.unknownLines;
   }
   totals.aiShare = share(totals.aiLines, totals.addedLines);
 
@@ -117,15 +145,45 @@ export async function collectProvenance(options: CollectOptions): Promise<Change
     base: baseSha,
     head: headSha,
     mergeBase: mb,
-    commits,
-    files: fileProvenance,
+    commits: [...records.values()].map((r) => r.provenance),
+    files,
     totals,
     agents: [...allAgents.values()],
     stats,
   };
 }
 
-async function describeCommit(repo: string, sha: string, notesRef: string): Promise<CommitProvenance> {
+function attributeLine(acc: FileAccumulator, record: CommitRecord, path: string, lineNumber: number): void {
+  const commit = record.provenance;
+  acc.confidences.add(commit.confidence);
+
+  if (commit.confidence === 'commit-level') {
+    acc.assumedAiLines += 1;
+    mergeAgents(acc.agents, commit.agents);
+    return;
+  }
+  if (commit.confidence === 'unknown') {
+    acc.unknownLines += 1;
+    return;
+  }
+  const entry = (record.entries.get(path) ?? []).find((e) =>
+    e.ranges.some((range) => lineNumber >= range.start && lineNumber <= range.end),
+  );
+  if (!entry) {
+    // Inside a logged commit but not attested: git-ai has no record, which it reports as human.
+    return;
+  }
+  if (entry.kind === 'ai') {
+    acc.aiLines += 1;
+    if (entry.agent) {
+      mergeAgents(acc.agents, [entry.agent]);
+    }
+  } else {
+    acc.humanLines += 1;
+  }
+}
+
+async function describeCommit(repo: string, sha: string, notesRef: string): Promise<CommitRecord> {
   const changedFiles = await commitChangedFiles(repo, sha);
   const note = await readNote(repo, sha, notesRef);
 
@@ -134,7 +192,9 @@ async function describeCommit(repo: string, sha: string, notesRef: string): Prom
     const agents = new Map<string, AgentId>();
     const humans = new Set<string>();
     const files: FileLineAttribution[] = [];
+    const entries = new Map<string, AuthorshipEntry[]>();
     for (const file of log.files) {
+      entries.set(file.path, file.entries);
       let aiLines = 0;
       let humanLines = 0;
       const fileAgents = new Map<string, AgentId>();
@@ -155,48 +215,32 @@ async function describeCommit(repo: string, sha: string, notesRef: string): Prom
       files.push({ path: file.path, aiLines, humanLines, agents: [...fileAgents.values()] });
     }
     return {
-      sha,
-      source: 'git-ai',
-      confidence: 'exact',
-      files,
-      changedFiles,
-      agents: [...agents.values()],
-      humanAuthors: [...humans],
+      provenance: {
+        sha,
+        source: 'git-ai',
+        confidence: 'exact',
+        files,
+        changedFiles,
+        agents: [...agents.values()],
+        humanAuthors: [...humans],
+      },
+      entries,
     };
   }
 
   const agents = detectAgentsFromMessage(await commitMessage(repo, sha));
-  if (agents.length > 0) {
-    return { sha, source: 'trailer', confidence: 'commit-level', files: [], changedFiles, agents, humanAuthors: [] };
-  }
-  return { sha, source: 'none', confidence: 'unknown', files: [], changedFiles, agents: [], humanAuthors: [] };
+  const provenance: CommitProvenance =
+    agents.length > 0
+      ? { sha, source: 'trailer', confidence: 'commit-level', files: [], changedFiles, agents, humanAuthors: [] }
+      : { sha, source: 'none', confidence: 'unknown', files: [], changedFiles, agents: [], humanAuthors: [] };
+  return { provenance, entries: new Map() };
 }
 
-function accumulator(files: Map<string, FileAccumulator>, path: string): FileAccumulator {
-  let acc = files.get(path);
-  if (!acc) {
-    acc = {
-      aiLines: 0,
-      humanLines: 0,
-      agents: new Map(),
-      touchedBy: 0,
-      exactCommits: 0,
-      commitLevelCommits: 0,
-      unknownCommits: 0,
-    };
-    files.set(path, acc);
-  }
-  return acc;
-}
-
-function fileConfidence(acc: FileAccumulator | undefined): Confidence {
-  if (!acc || acc.touchedBy === 0) {
+function worst(confidences: Set<Confidence>): Confidence {
+  if (confidences.size === 0 || confidences.has('unknown')) {
     return 'unknown';
   }
-  if (acc.unknownCommits > 0) {
-    return 'unknown';
-  }
-  if (acc.commitLevelCommits > 0) {
+  if (confidences.has('commit-level')) {
     return 'commit-level';
   }
   return 'exact';
