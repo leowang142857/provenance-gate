@@ -26,7 +26,8 @@
 | `src/commands/check.ts` | Glue shared by CLI and App: load policy, collect, evaluate, render. |
 | `src/github/review-state.ts` | Approvals, labels and team membership from the REST API into `ReviewState`. |
 | `src/github/app.ts` | GitHub App webhook handler: clone with installation token, evaluate, publish Check Run. |
-| `src/cli.ts` | `check`, `inspect`, `init`, `validate`. |
+| `src/program.ts` | `check`, `inspect`, `init`, `validate`, built by `createProgram(io)` so tests can run the commands in-process. |
+| `src/cli.ts` | Executable entry point: runs the program against the real process. |
 | `src/server.ts` | HTTP entry point for the App. |
 
 ## Design decisions
