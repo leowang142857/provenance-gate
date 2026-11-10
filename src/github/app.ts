@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { App } from '@octokit/app';
 
 import { runCheck } from '../commands/check.js';
+import { DEFAULT_NOTES_REF } from '../provenance/collect.js';
 import { git } from '../provenance/git.js';
 import { parsePolicy } from '../policy/schema.js';
 import { summaryLine } from '../report/markdown.js';
@@ -157,11 +158,7 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
     await git(workdir, ['remote', 'add', 'origin', input.cloneUrl]);
     await writeRemoteAuth(workdir, token);
     await git(workdir, ['fetch', '--quiet', '--filter=blob:none', 'origin', pull.base.sha, pull.head.sha]);
-    try {
-      await git(workdir, ['fetch', '--quiet', 'origin', '+refs/notes/ai:refs/notes/ai']);
-    } catch {
-      // Repository has no authorship notes yet; commit trailers are the only signal.
-    }
+    await fetchAuthorshipNotes(workdir);
 
     const teams = policy.rules.flatMap((rule) => rule.require?.teams ?? []);
     const review = await fetchReviewState(octokit, { owner, repo, number: pull.number }, { teams, headSha: pull.head.sha });
@@ -207,6 +204,23 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
 export async function writeRemoteAuth(workdir: string, token: string): Promise<void> {
   const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
   await appendFile(join(workdir, '.git', 'config'), `[http]\n\textraHeader = Authorization: Basic ${basic}\n`, 'utf8');
+}
+
+/**
+ * Fetches the authorship notes when the remote has them. A repository without the notes ref is normal
+ * (commit trailers are then the only signal), but a failed request is not: evaluating without notes that
+ * do exist would hide the agent's involvement, so every error other than "no such ref" propagates.
+ *
+ * `ls-remote` exits 0 with no output when nothing matches, which tells the two cases apart without
+ * matching git's error text.
+ */
+async function fetchAuthorshipNotes(workdir: string): Promise<void> {
+  const advertised = await git(workdir, ['ls-remote', 'origin', DEFAULT_NOTES_REF]);
+  const present = advertised.split('\n').some((line) => line.split('\t')[1] === DEFAULT_NOTES_REF);
+  if (!present) {
+    return;
+  }
+  await git(workdir, ['fetch', '--quiet', 'origin', `+${DEFAULT_NOTES_REF}:${DEFAULT_NOTES_REF}`]);
 }
 
 /** Check Run output is visible to anyone who can read the repository; never echo credentials into it. */
