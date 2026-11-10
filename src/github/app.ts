@@ -124,7 +124,18 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
     });
 
   // The policy comes from the base branch: a pull request must not be able to weaken or delete its own gate.
-  const policyText = await readPolicyFromRepo(octokit, owner, repo, pull.base.sha, policyPath);
+  let policyText: string | null;
+  try {
+    policyText = await readPolicyFromRepo(octokit, owner, repo, pull.base.sha, policyPath);
+  } catch (error) {
+    // A neutral check satisfies a required status, so a policy we could not read must fail, not skip.
+    await finish(
+      'failure',
+      'Could not read policy',
+      `\`${policyPath}\` could not be read from the base commit, so the change cannot be evaluated:\n\n\`\`\`\n${redact((error as Error).message, '')}\n\`\`\``,
+    );
+    throw error;
+  }
   if (policyText === null) {
     await finish('neutral', 'No policy found', `Add \`${policyPath}\` to the repository to enable provenance-gate.`);
     return;
@@ -208,6 +219,11 @@ export function redact(text: string, token: string): string {
   return out;
 }
 
+/**
+ * Returns the policy text, or `null` only when GitHub answers 404: the file does not exist at `ref`.
+ * Everything else throws. "No policy" turns into a neutral check, which satisfies a required status,
+ * so an outage, a permission problem or an unreadable file must not be mistaken for it.
+ */
 async function readPolicyFromRepo(
   octokit: MinimalOctokit,
   owner: string,
@@ -215,14 +231,26 @@ async function readPolicyFromRepo(
   ref: string,
   path: string,
 ): Promise<string | null> {
+  let data: unknown;
   try {
-    const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner, repo, path, ref });
-    const file = data as { content?: string; encoding?: string };
-    if (!file.content) {
+    ({ data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner, repo, path, ref }));
+  } catch (error) {
+    if ((error as { status?: unknown }).status === 404) {
       return null;
     }
-    return Buffer.from(file.content, (file.encoding as BufferEncoding | undefined) ?? 'base64').toString('utf8');
-  } catch {
-    return null;
+    throw new Error(`could not read ${path} at ${ref}: ${(error as Error).message}`);
   }
+
+  const file = data as { type?: unknown; content?: unknown; encoding?: unknown } | null;
+  if (file === null || typeof file !== 'object' || Array.isArray(file) || (file.type !== undefined && file.type !== 'file')) {
+    throw new Error(`${path} at ${ref} is not a regular file`);
+  }
+  // The contents API returns an empty body with encoding "none" for files larger than 1 MB.
+  if (typeof file.content !== 'string' || file.content.length === 0) {
+    throw new Error(`${path} at ${ref} was returned without content (empty, or larger than the 1 MB contents API limit)`);
+  }
+  if (file.encoding !== undefined && file.encoding !== 'base64') {
+    throw new Error(`${path} at ${ref} was returned with unsupported encoding "${String(file.encoding)}"`);
+  }
+  return Buffer.from(file.content, 'base64').toString('utf8');
 }

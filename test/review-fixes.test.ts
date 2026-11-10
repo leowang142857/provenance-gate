@@ -125,7 +125,7 @@ describe('GitHub App', () => {
       request: async (route: string, params?: Record<string, unknown>) => {
         calls.push({ route, ...(params ? { params } : {}) });
         if (route.startsWith('GET /repos/{owner}/{repo}/contents/')) {
-          throw new Error('404');
+          throw Object.assign(new Error('Not Found'), { status: 404 });
         }
         return { data: { id: 7 } };
       },
