@@ -50,6 +50,26 @@ export class GitFixture {
     await rm(notePath, { force: true });
   }
 
+  /**
+   * Stores agentdiff trace records the way agentdiff does: as `traces.jsonl` in the tree of a commit
+   * that `ref` points to. A temporary index keeps the working tree and the real index untouched.
+   */
+  async addAgentdiffTraces(records: unknown[], ref = 'refs/agentdiff/meta'): Promise<void> {
+    const scratch = await mkdtemp(join(tmpdir(), 'provenance-gate-traces-'));
+    try {
+      const file = join(scratch, 'traces.jsonl');
+      await writeFile(file, records.map((record) => `${JSON.stringify(record)}\n`).join(''), 'utf8');
+      const blob = await this.git('hash-object', '-w', file);
+      const env = { ...HERMETIC_ENV, GIT_INDEX_FILE: join(scratch, 'index') };
+      await execFileAsync('git', ['update-index', '--add', '--cacheinfo', `100644,${blob},traces.jsonl`], { cwd: this.dir, env });
+      const tree = (await execFileAsync('git', ['write-tree'], { cwd: this.dir, env })).stdout.trim();
+      const commit = await this.git('commit-tree', tree, '-m', 'agentdiff traces');
+      await this.git('update-ref', ref, commit);
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  }
+
   async cleanup(): Promise<void> {
     await rm(this.dir, { recursive: true, force: true });
   }
@@ -65,4 +85,28 @@ export function authorshipNote(
 ): string {
   const attestation = files.flatMap((f) => [f.path, ...f.entries.map((e) => `  ${e}`)]).join('\n');
   return `${attestation}\n---\n${JSON.stringify({ schema_version: 'authorship/3.0.0', prompts: {}, ...metadata }, null, 2)}\n`;
+}
+
+/** An agentdiff (Agent Trace v0.1) record for one commit. */
+export function agentdiffTrace(
+  sha: string,
+  files: Array<{ path: string; type: string; ranges: Array<[number, number]>; modelId?: string }>,
+  tool = 'claude-code',
+): Record<string, unknown> {
+  return {
+    version: '0.1.0',
+    id: `trace-${sha.slice(0, 12)}-${files.map((f) => f.path).join('+')}`,
+    timestamp: '2026-11-16T00:00:00Z',
+    vcs: { type: 'git', revision: sha },
+    tool: { name: tool },
+    files: files.map((file) => ({
+      path: file.path,
+      conversations: [
+        {
+          contributor: { type: file.type, ...(file.modelId ? { model_id: file.modelId } : {}) },
+          ranges: file.ranges.map(([start_line, end_line]) => ({ start_line, end_line })),
+        },
+      ],
+    })),
+  };
 }

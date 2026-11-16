@@ -11,10 +11,10 @@ export interface AgentId {
 }
 
 /** Where a commit's provenance signal came from. */
-export type AttributionSource = 'git-ai' | 'trailer' | 'none';
+export type AttributionSource = 'git-ai' | 'agentdiff' | 'trailer' | 'none';
 
 /**
- * exact        - line-level attribution from a git-ai authorship log
+ * exact        - line-level attribution from a git-ai authorship log or an agentdiff trace
  * commit-level - we know an agent was involved (commit trailer) but not which lines
  * unknown      - no provenance signal at all
  */

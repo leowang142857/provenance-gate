@@ -2,7 +2,7 @@
 # Docs: https://github.com/leowang142857/provenance-gate
 #
 # Rules are evaluated against the provenance of a pull request:
-#   - line-level attribution from git-ai authorship logs (refs/notes/ai)
+#   - line-level attribution from git-ai authorship logs (refs/notes/ai) and agentdiff traces (refs/agentdiff/*)
 #   - commit-level agent trailers (Co-authored-by: Claude <noreply@anthropic.com>, Agent: codex, ...)
 #
 # A rule with `paths` is evaluated per matching file; a rule without `paths` is

@@ -28,10 +28,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Fetch authorship notes and base
+      - name: Fetch provenance records and base
         run: |
           git fetch origin '+refs/notes/ai:refs/notes/ai' || echo "no authorship notes in this repository"
           git fetch origin ${{ github.event.pull_request.base.sha }}
+          # agentdiff traces, when the repository has them. A failed listing fails the step.
+          agentdiff_refs="$(git ls-remote origin 'refs/agentdiff/meta' 'refs/agentdiff/traces/*')"
+          if [ -n "$agentdiff_refs" ]; then git fetch origin '+refs/agentdiff/*:refs/agentdiff/*'; fi
 
       - uses: actions/setup-node@v4
         with:

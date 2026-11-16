@@ -96,6 +96,11 @@ export function detectAgentsFromMessage(message: string): AgentId[] {
   return [...agents.values()];
 }
 
+/** Maps a tool name such as "claude-code" or "Cursor Agent" to the identifier used in `agents` rules, when it is a known agent. */
+export function knownAgentTool(name: string): string | undefined {
+  return matchKnownAgent(name);
+}
+
 function matchKnownAgent(value: string): string | undefined {
   for (const known of KNOWN_AGENTS) {
     if (known.pattern.test(value)) {

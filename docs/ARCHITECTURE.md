@@ -17,9 +17,10 @@
 | Module | Responsibility |
 | --- | --- |
 | `src/provenance/gitai.ts` | Parse Git AI Standard v3.0.0 authorship logs. Routes `s_`, `h_` and legacy keys to their metadata maps; tolerates missing records. |
+| `src/provenance/agentdiff.ts` | Read agentdiff traces (Agent Trace v0.1 JSON Lines in `refs/agentdiff/meta` and `refs/agentdiff/traces/*`) into the same per-commit, per-file line entries as an authorship log. Unreadable records are errors. |
 | `src/provenance/trailers.ts` | Detect agents from commit trailers (git trailer semantics: the final paragraph only). |
 | `src/provenance/git.ts` | Thin `git` CLI wrapper: rev-list, notes show, diff-tree, numstat, merge-base. |
-| `src/provenance/collect.ts` | Walk `merge-base(base, head)..head`, blame each changed file at head, look every surviving line up in its commit's authorship log (or trailer signal), produce `ChangeProvenance`. |
+| `src/provenance/collect.ts` | Walk `merge-base(base, head)..head`, blame each changed file at head, look every surviving line up in its commit's authorship log and agentdiff trace (or trailer signal), produce `ChangeProvenance`. |
 | `src/policy/schema.ts` | Zod schema for `.provenance-policy.yml`; strict keys, defaults, validation errors with paths. |
 | `src/policy/evaluate.ts` | Pure evaluator: `(policy, provenance, review) -> Verdict`. No I/O, fully unit-tested. |
 | `src/report/markdown.ts` | Render a verdict for humans (CLI output and Check Run body). |
@@ -33,6 +34,8 @@
 ## Design decisions
 
 **Consume provenance, do not detect it.** Heuristic "AI detection" is unreliable and adversarial. git-ai is an open standard with line-level data that the major agents already write, and commit trailers are a universal, cheap fallback. We report confidence explicitly (`exact` / `commit-level` / `unknown`) instead of pretending.
+
+**Many sources, one enforcement layer.** Recording provenance and enforcing a policy on it are separate jobs. Every source is reduced to the same shape (commit, path, line range, AI or human, agent), so adding a format is a reader, not a change to the evaluator. Where sources disagree about a line, the one that says AI wins.
 
 **Conservative by default.** Unknown lines count as AI unless the policy says otherwise; commit-level signals count as fully AI for the files they touch. The gate should make a team look at a change, not quietly wave it through.
 
@@ -53,7 +56,7 @@
 
 ## Roadmap
 
-1. Support agentdiff records and GitHub's native agent-authored PR signal as additional sources.
+1. GitHub's native agent-authored PR signal as an additional source, once it is exposed through the API. Verify agentdiff support against a real installation, and consider a policy option that requires signed traces.
 2. GitLab / Gitee merge-request integration (same evaluator, different review-state adapter).
 3. Policy test harness: `provenance-gate test` runs a policy against fixture changes and asserts verdicts.
 4. Org-level reporting: revert rate per model / agent / skill to inform `agents` rules.

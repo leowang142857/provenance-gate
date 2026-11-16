@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { evaluatePullRequest } from '../src/github/app.js';
-import { GitFixture, authorshipNote, lines } from './helpers/git-fixture.js';
+import { GitFixture, agentdiffTrace, authorshipNote, lines } from './helpers/git-fixture.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -201,6 +201,18 @@ rules:
 
   it('fetches the notes and applies line-level attribution', async () => {
     const repo = await createRemote({ withNotes: true });
+    const { octokit, updates } = fakeOctokit(policyFile(policy));
+    await evaluate(octokit, repo);
+    expect(updates).toEqual([expect.objectContaining({ conclusion: 'failure', title: 'Provenance gate: fail' })]);
+    expect(updates[0]?.summary).toContain('codex/gpt-5');
+  });
+
+  it('fetches agentdiff traces and applies line-level attribution', async () => {
+    const repo = await createRemote({ withNotes: false });
+    await remote?.addAgentdiffTraces(
+      [agentdiffTrace(repo.head, [{ path: 'src/auth/login.ts', type: 'ai', ranges: [[1, 12]], modelId: 'openai/gpt-5' }], 'codex')],
+      'refs/agentdiff/traces/feature',
+    );
     const { octokit, updates } = fakeOctokit(policyFile(policy));
     await evaluate(octokit, repo);
     expect(updates).toEqual([expect.objectContaining({ conclusion: 'failure', title: 'Provenance gate: fail' })]);
