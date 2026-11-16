@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -6,7 +7,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { evaluatePullRequest } from '../src/github/app.js';
+import { createApp, evaluatePullRequest } from '../src/github/app.js';
 import { GitFixture, authorshipNote, lines } from './helpers/git-fixture.js';
 
 const execFileAsync = promisify(execFile);
@@ -223,5 +224,59 @@ rules:
     expect(updates).toEqual([expect.objectContaining({ conclusion: 'failure', title: 'provenance-gate crashed' })]);
     expect(updates[0]?.summary).toContain('403');
     expect(updates[0]?.summary).not.toContain(TOKEN);
+  });
+});
+
+describe('GitHub App webhook subscriptions', () => {
+  // Never used to sign anything: the stubbed evaluation makes no request. The App only needs a key to exist.
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+
+  function pullRequestPayload(action: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      action,
+      number: 5,
+      pull_request: {
+        number: 5,
+        head: { sha: 'headsha', ref: 'feature' },
+        base: { sha: 'mainsha', ref: 'main' },
+        labels: [],
+      },
+      repository: { name: 'r', owner: { login: 'o' }, clone_url: 'https://github.com/o/r.git' },
+      installation: { id: 42 },
+      ...extra,
+    };
+  }
+
+  /** Delivers one pull_request webhook and returns the base and head of every evaluation it started. */
+  async function deliver(payload: Record<string, unknown>): Promise<Array<{ base: string; head: string }>> {
+    const evaluated: Array<{ base: string; head: string }> = [];
+    const app = createApp({ appId: 1, privateKey, webhookSecret: 'secret' }, async (input) => {
+      evaluated.push({ base: input.pull.base.sha, head: input.pull.head.sha });
+    });
+    await app.webhooks.receive({ id: 'delivery-1', name: 'pull_request', payload } as never);
+    return evaluated;
+  }
+
+  it('evaluates a newly opened pull request', async () => {
+    expect(await deliver(pullRequestPayload('opened'))).toEqual([{ base: 'mainsha', head: 'headsha' }]);
+  });
+
+  // The head commit, and with it the previous Check Run, survives a change of base branch. A pull request
+  // opened against a branch without a policy gets a neutral check; retargeted to main it must be judged
+  // by main's policy instead of keeping that result.
+  it('re-evaluates against the new base when the base branch of a pull request changes', async () => {
+    const payload = pullRequestPayload('edited', {
+      changes: { base: { ref: { from: 'no-policy-branch' }, sha: { from: 'oldbasesha' } } },
+    });
+    expect(await deliver(payload)).toEqual([{ base: 'mainsha', head: 'headsha' }]);
+  });
+
+  it('does not re-evaluate when only the title or body was edited', async () => {
+    const payload = pullRequestPayload('edited', { changes: { title: { from: 'old title' } } });
+    expect(await deliver(payload)).toEqual([]);
   });
 });
