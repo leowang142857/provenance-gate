@@ -1,7 +1,8 @@
 /**
  * GitHub App integration.
  *
- * On pull request and review events we:
+ * On pull request events (opened, new commits, reopened, ready for review, base branch changed) and
+ * review events we:
  *   1. shallow-clone the repository with the installation token, including refs/notes/ai
  *   2. read .provenance-policy.yml from the PR base, so the PR cannot change its own policy
  *   3. fetch approvals and labels
@@ -45,7 +46,21 @@ interface RepositoryPayload {
   clone_url: string;
 }
 
-export function createApp(config: AppConfig): App {
+/**
+ * `pull_request.edited` also fires for title and body edits, which cannot change the verdict. Only a
+ * change of the base branch needs a new evaluation: the policy is read from the base and the commit
+ * range starts at the merge base, while the Check Run of the earlier evaluation stays on the unchanged
+ * head commit.
+ */
+export function needsEvaluation(payload: { action?: unknown; changes?: { base?: unknown } }): boolean {
+  return payload.action !== 'edited' || payload.changes?.base !== undefined;
+}
+
+/**
+ * @param evaluate Runs the evaluation for one pull request. Replaceable so tests can observe which
+ *   deliveries lead to an evaluation without talking to GitHub.
+ */
+export function createApp(config: AppConfig, evaluate: typeof evaluatePullRequest = evaluatePullRequest): App {
   const app = new App({
     appId: config.appId,
     privateKey: config.privateKey,
@@ -57,6 +72,7 @@ export function createApp(config: AppConfig): App {
     | 'pull_request.synchronize'
     | 'pull_request.reopened'
     | 'pull_request.ready_for_review'
+    | 'pull_request.edited'
     | 'pull_request_review.submitted'
     | 'pull_request_review.dismissed'
   > = [
@@ -64,18 +80,24 @@ export function createApp(config: AppConfig): App {
     'pull_request.synchronize',
     'pull_request.reopened',
     'pull_request.ready_for_review',
+    // Retargeting a pull request keeps its head commit, so without this the Check Run computed against
+    // the old base (possibly "No policy found", which satisfies a required check) would stay in place.
+    'pull_request.edited',
     'pull_request_review.submitted',
     'pull_request_review.dismissed',
   ];
 
   app.webhooks.on(events, async ({ octokit, payload }) => {
+    if (!needsEvaluation(payload as unknown as { action?: unknown; changes?: { base?: unknown } })) {
+      return;
+    }
     const pull = payload.pull_request as unknown as PullRequestPayload;
     const repository = payload.repository as unknown as RepositoryPayload;
     const installationId = payload.installation?.id;
     if (installationId === undefined) {
       return;
     }
-    await evaluatePullRequest({
+    await evaluate({
       octokit: octokit as unknown as MinimalOctokit & { auth: (opts: { type: string }) => Promise<unknown> },
       owner: repository.owner.login,
       repo: repository.name,
