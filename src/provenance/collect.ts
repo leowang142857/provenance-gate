@@ -1,3 +1,4 @@
+import { findTraceEntry, readAgentdiffTraces, type AgentdiffTraces } from './agentdiff.js';
 import { isAuthorshipLog, parseAuthorshipLog, type AuthorshipEntry } from './gitai.js';
 import {
   blameRange,
@@ -31,8 +32,10 @@ export interface CollectOptions {
 
 interface CommitRecord {
   provenance: CommitProvenance;
-  /** Authorship entries per path, as written in that commit's log. */
+  /** Authorship entries per path, as written in that commit's git-ai log. */
   entries: Map<string, AuthorshipEntry[]>;
+  /** Entries per path from the commit's agentdiff trace, when it has one. */
+  traced: Map<string, AuthorshipEntry[]> | undefined;
 }
 
 interface FileAccumulator {
@@ -50,7 +53,7 @@ interface FileAccumulator {
  * (merge-base semantics, the same diff a pull request shows).
  *
  * Every line of each changed file at `head` is blamed back to the commit in the range
- * that introduced it, then looked up in that commit's authorship log. Shares therefore
+ * that introduced it, then looked up in that commit's git-ai authorship log and agentdiff trace. Shares therefore
  * describe the code that will actually merge: lines an agent wrote and a human later
  * rewrote count as human.
  */
@@ -65,8 +68,9 @@ export async function collectProvenance(options: CollectOptions): Promise<Change
   const allAgents = new Map<string, AgentId>();
   const stats = { commits: 0, exact: 0, commitLevel: 0, none: 0 };
 
+  const traces = await readAgentdiffTraces(options.repo);
   for (const sha of await listCommits(options.repo, mb, headSha)) {
-    const record = await describeCommit(options.repo, sha, notesRef);
+    const record = await describeCommit(options.repo, sha, notesRef, traces);
     records.set(sha, record);
     stats.commits += 1;
     stats[confidenceBucket(record.provenance.confidence)] += 1;
@@ -172,26 +176,37 @@ function attributeLine(acc: FileAccumulator, record: CommitRecord, path: string,
     acc.unknownLines += 1;
     return;
   }
-  const entry = (record.entries.get(path) ?? []).find((e) =>
+  const logged = (record.entries.get(path) ?? []).find((e) =>
     e.ranges.some((range) => lineNumber >= range.start && lineNumber <= range.end),
   );
-  if (!entry) {
+  const traced = findTraceEntry(record.traced?.get(path), lineNumber);
+  // When a commit has both a git-ai log and an agentdiff trace, a line is AI if either says so.
+  const ai = logged?.kind === 'ai' ? logged : traced?.kind === 'ai' ? traced : undefined;
+  if (ai) {
+    acc.aiLines += 1;
+    if (ai.agent) {
+      mergeAgents(acc.agents, [ai.agent]);
+    }
+    return;
+  }
+  if (logged ?? traced) {
+    acc.humanLines += 1;
+    return;
+  }
+  if (commit.source === 'git-ai') {
     // Inside a logged commit but not attested: git-ai has no record, which it reports as human.
     return;
   }
-  if (entry.kind === 'ai') {
-    acc.aiLines += 1;
-    if (entry.agent) {
-      mergeAgents(acc.agents, [entry.agent]);
-    }
-  } else {
-    acc.humanLines += 1;
-  }
+  // agentdiff records every line a commit adds, so a line its trace does not mention has no
+  // provenance record at all. It follows defaults.unknown_provenance like any untracked line.
+  acc.unknownLines += 1;
+  acc.confidences.add('unknown');
 }
 
-async function describeCommit(repo: string, sha: string, notesRef: string): Promise<CommitRecord> {
+async function describeCommit(repo: string, sha: string, notesRef: string, traces: AgentdiffTraces): Promise<CommitRecord> {
   const changedFiles = await commitChangedFiles(repo, sha);
   const note = await readNote(repo, sha, notesRef);
+  const traced = traces.get(sha);
 
   if (note !== null && isAuthorshipLog(note)) {
     const log = parseAuthorshipLog(note);
@@ -220,6 +235,10 @@ async function describeCommit(repo: string, sha: string, notesRef: string): Prom
       mergeAgents(agents, fileAgents.values());
       files.push({ path: file.path, aiLines, humanLines, agents: [...fileAgents.values()] });
     }
+    // Agents that only the agentdiff trace knows about still took part in the commit.
+    if (traced) {
+      mergeAgents(agents, summarizeTrace(traced).agents);
+    }
     return {
       provenance: {
         sha,
@@ -231,6 +250,24 @@ async function describeCommit(repo: string, sha: string, notesRef: string): Prom
         humanAuthors: [...humans],
       },
       entries,
+      traced,
+    };
+  }
+
+  if (traced) {
+    const summary = summarizeTrace(traced);
+    return {
+      provenance: {
+        sha,
+        source: 'agentdiff',
+        confidence: 'exact',
+        files: summary.files,
+        changedFiles,
+        agents: summary.agents,
+        humanAuthors: [],
+      },
+      entries: new Map(),
+      traced,
     };
   }
 
@@ -239,7 +276,30 @@ async function describeCommit(repo: string, sha: string, notesRef: string): Prom
     agents.length > 0
       ? { sha, source: 'trailer', confidence: 'commit-level', files: [], changedFiles, agents, humanAuthors: [] }
       : { sha, source: 'none', confidence: 'unknown', files: [], changedFiles, agents: [], humanAuthors: [] };
-  return { provenance, entries: new Map() };
+  return { provenance, entries: new Map(), traced: undefined };
+}
+
+function summarizeTrace(traced: Map<string, AuthorshipEntry[]>): { files: FileLineAttribution[]; agents: AgentId[] } {
+  const agents = new Map<string, AgentId>();
+  const files: FileLineAttribution[] = [];
+  for (const [path, entries] of traced) {
+    let aiLines = 0;
+    let humanLines = 0;
+    const fileAgents = new Map<string, AgentId>();
+    for (const entry of entries) {
+      if (entry.kind === 'ai') {
+        aiLines += entry.lineCount;
+        if (entry.agent) {
+          mergeAgents(fileAgents, [entry.agent]);
+        }
+      } else {
+        humanLines += entry.lineCount;
+      }
+    }
+    mergeAgents(agents, fileAgents.values());
+    files.push({ path, aiLines, humanLines, agents: [...fileAgents.values()] });
+  }
+  return { files, agents: [...agents.values()] };
 }
 
 function worst(confidences: Set<Confidence>): Confidence {

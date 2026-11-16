@@ -59,7 +59,7 @@ export function renderMarkdown(provenance: ChangeProvenance, verdict: Verdict): 
   );
   out.push('');
   out.push(
-    '<sub>Each surviving line is blamed to the commit that introduced it and looked up in that commit\'s git-ai authorship log (refs/notes/ai). Lines from commits with only an agent trailer count as AI.</sub>',
+    '<sub>Each surviving line is blamed to the commit that introduced it and looked up in that commit\'s git-ai authorship log (refs/notes/ai) or agentdiff trace (refs/agentdiff). Lines from commits with only an agent trailer count as AI.</sub>',
   );
   return out.join('\n');
 }
