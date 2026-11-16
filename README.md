@@ -4,7 +4,7 @@ Merge-policy enforcement driven by AI code provenance. Branch protection that un
 
 ## Why
 
-More than 40% of pull requests on GitHub now start with an agent, and agent-written PRs merge faster than human ones. Tools such as [git-ai](https://github.com/git-ai-project/git-ai) already record *which lines* an agent wrote, with which model and prompt. Nothing enforces anything based on that record.
+More than 40% of pull requests on GitHub now start with an agent, and agent-written PRs merge faster than human ones. Tools such as [git-ai](https://github.com/git-ai-project/git-ai) and [agentdiff](https://github.com/codeprakhar25/agentdiff) already record *which lines* an agent wrote, with which model and prompt. provenance-gate does not record anything itself: it is the enforcement layer on top of whichever of those records your repository has, and it ties them to who has to review the change.
 
 provenance-gate reads the provenance that already exists in your repository and turns it into merge rules:
 
@@ -20,6 +20,7 @@ It runs as a CLI (in CI, or locally) and as a GitHub App that publishes a Check 
 | Signal | Source | Confidence |
 | --- | --- | --- |
 | Line-level attribution | [Git AI Standard v3.0.0](https://github.com/git-ai-project/git-ai/blob/main/specs/git_ai_standard_v3.0.0.md) authorship logs in `refs/notes/ai` (sessions, legacy and known-human keys) | `exact` |
+| Line-level attribution | [agentdiff](https://github.com/codeprakhar25/agentdiff) traces (Agent Trace v0.1 records in `refs/agentdiff/meta` and `refs/agentdiff/traces/*`) | `exact` |
 | Commit-level agent involvement | Commit trailers: `Co-authored-by: Claude <noreply@anthropic.com>`, `Co-authored-by: Cursor Agent <cursoragent@cursor.com>`, `Agent: codex`, `AI-Model: ...`, and similar for Copilot, Gemini, Devin, OpenCode, Aider, Windsurf, DeepSeek, Qwen, Kimi | `commit-level` |
 | Nothing | - | `unknown`, handled by `defaults.unknown_provenance` |
 
@@ -42,7 +43,7 @@ GITHUB_TOKEN=... node dist/cli.js check --base origin/main --head HEAD --github 
 
 `check` exits `1` when the verdict is `fail`, `0` otherwise (`--fail-on-warn` to also fail on warnings). `--json` prints the full verdict and provenance.
 
-Make sure the authorship notes are available locally: `git fetch origin '+refs/notes/ai:refs/notes/ai'`.
+Make sure the provenance records are available locally: `git fetch origin '+refs/notes/ai:refs/notes/ai'` for git-ai, `git fetch origin '+refs/agentdiff/*:refs/agentdiff/*'` for agentdiff.
 
 ## Policy file
 
@@ -102,7 +103,7 @@ See [`examples/github-actions.yml`](./examples/github-actions.yml). The workflow
 
 ## GitHub App
 
-`src/server.ts` runs a webhook server that, on pull request and review events, shallow-clones the repository with the installation token (including `refs/notes/ai`), reads `.provenance-policy.yml` from the PR base (so a pull request cannot change the policy that judges it), fetches approvals left on the current head commit and team memberships, evaluates the policy and publishes a `provenance-gate` Check Run with the full report. Required permissions: `checks: write`, `contents: read`, `pull_requests: read`, `metadata: read`, and `members: read` on the organization if you use `teams`. Subscribe to `pull_request` and `pull_request_review`.
+`src/server.ts` runs a webhook server that, on pull request and review events, shallow-clones the repository with the installation token (including `refs/notes/ai` and agentdiff's refs), reads `.provenance-policy.yml` from the PR base (so a pull request cannot change the policy that judges it), fetches approvals left on the current head commit and team memberships, evaluates the policy and publishes a `provenance-gate` Check Run with the full report. Required permissions: `checks: write`, `contents: read`, `pull_requests: read`, `metadata: read`, and `members: read` on the organization if you use `teams`. Subscribe to `pull_request` and `pull_request_review`.
 
 ```bash
 APP_ID=... PRIVATE_KEY="$(cat key.pem)" WEBHOOK_SECRET=... node dist/server.js
@@ -134,6 +135,8 @@ Verified with git-ai 1.7.6 on Linux: per-file AI lines match `git-ai blame` line
 
 - Only lines that survive to the head of the PR are counted: each line is blamed to the commit that introduced it and looked up in that commit's authorship log. Deletion-only changes have no surviving lines and are judged by the confidence of the commits that touched the file.
 - Commit trailers only say an agent was involved somewhere in the commit. Surviving lines from those commits are counted as AI.
+- agentdiff support is written against agentdiff 0.1.30's source and record format and tested with records built by hand; it has not been run against a repository produced by a real agentdiff installation. agentdiff attributes all lines a commit adds to a file to one contributor, so its `exact` is coarser than git-ai's. Trace signatures are not verified: like git-ai notes, traces are trusted as far as push access to their refs is. Traces are keyed by commit, so commits rewritten by a rebase or amend lose theirs and count as untracked.
+- When a commit has both a git-ai log and an agentdiff trace, a line is AI if either says so. A line of an agentdiff-traced commit that the trace does not mention is untracked and follows `defaults.unknown_provenance`.
 - git-ai writes notes asynchronously and, on machines it detects as agent environments (cloud agents, CI with agent variables), may attribute edits to `cloud-agent`.
 - Team membership requires organization read access; without it, `teams` requirements cannot be satisfied.
 - The GitHub App has not been exercised against a live installation yet; the CLI and evaluator are covered by tests against real git repositories.
