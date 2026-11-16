@@ -98,7 +98,7 @@ Validate with `node dist/cli.js validate .provenance-policy.yml`. The full examp
 
 ## GitHub Actions
 
-See [`examples/github-actions.yml`](./examples/github-actions.yml). The workflow fetches `refs/notes/ai`, runs `check` with `--github` so approvals and labels come from the API, and fails the job on a `fail` verdict. Mark the job as a required status check.
+See [`examples/github-actions.yml`](./examples/github-actions.yml). The workflow fetches `refs/notes/ai`, runs `check` with `--github` so approvals and labels come from the API, and fails the job on a `fail` verdict. Mark the job as a required status check (see [Using with GitHub rulesets](#using-with-github-rulesets)).
 
 ## GitHub App
 
@@ -109,6 +109,31 @@ APP_ID=... PRIVATE_KEY="$(cat key.pem)" WEBHOOK_SECRET=... node dist/server.js
 ```
 
 Set `APPLY_LABELS=false` to stop the App from adding labels from `require.labels`.
+
+## Human approvals and AI reviewers
+
+`require.human_approvals`, `require.teams` and `require.reviewers` are satisfied by people only. GitHub can let Copilot code review submit approving reviews and count them towards a repository's required approvals; provenance-gate does not. With `--github` and in the App, an approval is counted as human only when the reviewer's account type is `User`. Reviews from GitHub Apps and other bot accounts, Copilot code review included, are reported as bot approvals and ignored unless the policy sets `defaults.count_bot_approvals: true`. The CLI's `--approval` flag always means a human; use `--bot-approval` for anything else.
+
+This makes "AI-written code needs a person to approve it" enforceable even when the repository's own approval count includes an AI reviewer.
+
+## Using with GitHub rulesets
+
+provenance-gate does not replace rulesets or branch protection. It publishes one status, and the ruleset is what makes that status block a merge:
+
+1. In a branch ruleset for your protected branches, add **Require status checks to pass** and add the check: `provenance-gate` for the App, or the workflow's job name (`gate` in the example) for Actions.
+2. Pin the check's expected source to the provenance-gate App or to GitHub Actions rather than "any source", so no other integration can report a passing status under the same name.
+3. Keep the policy file on every branch the ruleset targets. A base branch without `.provenance-policy.yml` gets a neutral check, and GitHub treats a neutral required check as passing.
+
+Division of labour:
+
+| Requirement | Where it belongs |
+| --- | --- |
+| Every pull request needs N approvals; a path always needs a given team | Ruleset (**Require a pull request before merging**, required review by specific teams, CODEOWNERS) |
+| A path needs a team, or extra approvals, only when AI wrote part of the change | provenance-gate rule with `paths` and `ai_share_gte` |
+| Agents may not change certain files at all | provenance-gate rule with `action: block` |
+| Approvals must come from people, not AI reviewers | provenance-gate (see above) |
+
+Rules that do not depend on who wrote the code are simpler and better enforced natively. Use provenance-gate for the conditions a ruleset cannot express.
 
 ## Library
 

@@ -16,7 +16,7 @@ export interface PullRef {
 }
 
 interface ReviewRecord {
-  user: { login: string; type: string } | null;
+  user: { login: string; type?: string } | null;
   state: string;
   submitted_at?: string | null;
   commit_id?: string | null;
@@ -62,7 +62,9 @@ export async function fetchReviewState(
     if (options.headSha && review.commit_id !== options.headSha) {
       continue;
     }
-    const approval: Approval = { login: review.user.login, isBot: review.user.type === 'Bot' };
+    // Only an account GitHub reports as a user is a person. Apps (Copilot code review among them) are
+    // `Bot`; anything else, or a missing type, is not evidence of a human either.
+    const approval: Approval = { login: review.user.login, isBot: review.user.type !== 'User' };
     if (options.teams && options.teams.length > 0) {
       approval.teams = await resolveTeams(octokit, pull.owner, review.user.login, options.teams);
     }
