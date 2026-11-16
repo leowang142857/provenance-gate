@@ -116,6 +116,70 @@ describe('review state', () => {
     const state = await fetchReviewState(octokit, { owner: 'o', repo: 'r', number: 1 }, { headSha: 'head' });
     expect(state.approvals.map((a) => a.login)).toEqual(['bob']);
   });
+
+  // GitHub can let Copilot code review submit approving reviews that count towards required approvals.
+  // An approval from an AI reviewer must not satisfy `human_approvals` on AI-written code.
+  describe('approvals from AI reviewers', () => {
+    const aiHeavy = {
+      base: 'b',
+      head: 'h',
+      mergeBase: 'b',
+      commits: [],
+      files: [
+        {
+          path: 'src/app.ts',
+          addedLines: 40,
+          deletedLines: 0,
+          aiLines: 40,
+          humanLines: 0,
+          assumedAiLines: 0,
+          unknownLines: 0,
+          aiShare: 1,
+          confidence: 'exact' as const,
+          assumedAi: false,
+          agents: [{ tool: 'copilot' }],
+        },
+      ],
+      totals: { addedLines: 40, deletedLines: 0, aiLines: 40, humanLines: 0, assumedAiLines: 0, unknownLines: 0, aiShare: 1 },
+      agents: [{ tool: 'copilot' }],
+      stats: { commits: 1, exact: 1, commitLevel: 0, none: 0 },
+    };
+    const needsHuman = (defaults: string): ReturnType<typeof parsePolicy> =>
+      parsePolicy(`
+version: 1
+${defaults}
+rules:
+  - name: ai-needs-a-human
+    when:
+      ai_share_gte: 0.8
+    require:
+      human_approvals: 1
+`);
+    const copilotOnly: MinimalOctokit = {
+      request: async (route) => ({
+        data: route.includes('/reviews')
+          ? [{ user: { login: 'copilot-pull-request-reviewer[bot]', type: 'Bot' }, state: 'APPROVED', commit_id: 'head' }]
+          : { labels: [] },
+      }),
+    };
+
+    it('marks a Copilot code review approval as a bot approval', async () => {
+      const state = await fetchReviewState(copilotOnly, { owner: 'o', repo: 'r', number: 1 }, { headSha: 'head' });
+      expect(state.approvals).toEqual([{ login: 'copilot-pull-request-reviewer[bot]', isBot: true }]);
+    });
+
+    it('does not let a Copilot approval satisfy human_approvals by default', async () => {
+      const state = await fetchReviewState(copilotOnly, { owner: 'o', repo: 'r', number: 1 }, { headSha: 'head' });
+      const verdict = evaluatePolicy(needsHuman(''), aiHeavy, state);
+      expect(verdict.status).toBe('fail');
+      expect(verdict.humanApprovalCount).toBe(0);
+    });
+
+    it('counts it only when the policy opts in with count_bot_approvals', async () => {
+      const state = await fetchReviewState(copilotOnly, { owner: 'o', repo: 'r', number: 1 }, { headSha: 'head' });
+      expect(evaluatePolicy(needsHuman('defaults: { count_bot_approvals: true }'), aiHeavy, state).status).toBe('pass');
+    });
+  });
 });
 
 describe('GitHub App', () => {

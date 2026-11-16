@@ -1,5 +1,6 @@
 # Copy to .github/workflows/provenance-gate.yml in the repository you want to protect,
-# then mark the "gate" job as a required status check in branch protection.
+# then require the "gate" status check in a branch ruleset (or branch protection), with its expected
+# source pinned to GitHub Actions.
 #
 # pull_request_target runs this file as it exists on the base branch, so a pull request cannot
 # edit the gate that judges it. That trigger has access to the base repository's secrets, so this
