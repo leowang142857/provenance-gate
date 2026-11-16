@@ -2,7 +2,7 @@
  * GitHub App integration.
  *
  * On pull request and review events we:
- *   1. shallow-clone the repository with the installation token, including refs/notes/ai
+ *   1. shallow-clone the repository with the installation token, including refs/notes/ai and agentdiff traces
  *   2. read .provenance-policy.yml from the PR base, so the PR cannot change its own policy
  *   3. fetch approvals and labels
  *   4. evaluate the policy and publish a Check Run that can be marked "required" in branch protection
@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { App } from '@octokit/app';
 
 import { runCheck } from '../commands/check.js';
+import { AGENTDIFF_META_REF, AGENTDIFF_TRACES_PREFIX } from '../provenance/agentdiff.js';
 import { DEFAULT_NOTES_REF } from '../provenance/collect.js';
 import { git } from '../provenance/git.js';
 import { parsePolicy } from '../policy/schema.js';
@@ -159,6 +160,7 @@ export async function evaluatePullRequest(input: EvaluateInput): Promise<void> {
     await writeRemoteAuth(workdir, token);
     await git(workdir, ['fetch', '--quiet', '--filter=blob:none', 'origin', pull.base.sha, pull.head.sha]);
     await fetchAuthorshipNotes(workdir);
+    await fetchAgentdiffTraces(workdir);
 
     const teams = policy.rules.flatMap((rule) => rule.require?.teams ?? []);
     const review = await fetchReviewState(octokit, { owner, repo, number: pull.number }, { teams, headSha: pull.head.sha });
@@ -221,6 +223,30 @@ async function fetchAuthorshipNotes(workdir: string): Promise<void> {
     return;
   }
   await git(workdir, ['fetch', '--quiet', 'origin', `+${DEFAULT_NOTES_REF}:${DEFAULT_NOTES_REF}`]);
+}
+
+/**
+ * Fetches agentdiff's consolidated store and per-branch trace refs when the remote has them, under the
+ * same rule as the authorship notes: absent is fine, a failed request is not.
+ */
+async function fetchAgentdiffTraces(workdir: string): Promise<void> {
+  const branchRefs = `${AGENTDIFF_TRACES_PREFIX}/*`;
+  const advertised = await git(workdir, ['ls-remote', 'origin', AGENTDIFF_META_REF, branchRefs]);
+  const refs = advertised
+    .split('\n')
+    .map((line) => line.split('\t')[1] ?? '')
+    .filter((ref) => ref.length > 0);
+  const refspecs: string[] = [];
+  if (refs.includes(AGENTDIFF_META_REF)) {
+    refspecs.push(`+${AGENTDIFF_META_REF}:${AGENTDIFF_META_REF}`);
+  }
+  if (refs.some((ref) => ref.startsWith(`${AGENTDIFF_TRACES_PREFIX}/`))) {
+    refspecs.push(`+${branchRefs}:${branchRefs}`);
+  }
+  if (refspecs.length === 0) {
+    return;
+  }
+  await git(workdir, ['fetch', '--quiet', 'origin', ...refspecs]);
 }
 
 /** Check Run output is visible to anyone who can read the repository; never echo credentials into it. */
