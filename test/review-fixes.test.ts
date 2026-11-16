@@ -175,6 +175,21 @@ rules:
       expect(verdict.humanApprovalCount).toBe(0);
     });
 
+    // "Human" is the claim that needs evidence: an account type we do not recognise, or a response
+    // without one, must not be counted as a person.
+    it.each([['Mannequin'], ['Organization'], [undefined]])('does not count a reviewer of account type %s as human', async (type) => {
+      const octokit: MinimalOctokit = {
+        request: async (route) => ({
+          data: route.includes('/reviews')
+            ? [{ user: { login: 'someone', ...(type ? { type } : {}) }, state: 'APPROVED', commit_id: 'head' }]
+            : { labels: [] },
+        }),
+      };
+      const state = await fetchReviewState(octokit, { owner: 'o', repo: 'r', number: 1 }, { headSha: 'head' });
+      expect(state.approvals).toEqual([{ login: 'someone', isBot: true }]);
+      expect(evaluatePolicy(needsHuman(''), aiHeavy, state).status).toBe('fail');
+    });
+
     it('counts it only when the policy opts in with count_bot_approvals', async () => {
       const state = await fetchReviewState(copilotOnly, { owner: 'o', repo: 'r', number: 1 }, { headSha: 'head' });
       expect(evaluatePolicy(needsHuman('defaults: { count_bot_approvals: true }'), aiHeavy, state).status).toBe('pass');
