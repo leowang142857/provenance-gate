@@ -28,9 +28,20 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
+      # A repository without refs/notes/ai is fine (commit trailers are then the only signal), but a
+      # failed request is not: evaluating without notes that do exist hides the agent's involvement.
+      # ls-remote --exit-code exits 2 only when the ref does not exist; any other failure stops the job.
       - name: Fetch authorship notes and base
         run: |
-          git fetch origin '+refs/notes/ai:refs/notes/ai' || echo "no authorship notes in this repository"
+          status=0
+          git ls-remote --exit-code origin refs/notes/ai > /dev/null || status=$?
+          if [ "$status" -eq 0 ]; then
+            git fetch origin '+refs/notes/ai:refs/notes/ai'
+          elif [ "$status" -eq 2 ]; then
+            echo "no authorship notes in this repository"
+          else
+            exit "$status"
+          fi
           git fetch origin ${{ github.event.pull_request.base.sha }}
 
       - uses: actions/setup-node@v4
