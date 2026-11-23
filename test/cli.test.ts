@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { MinimalOctokit } from '../src/github/review-state.js';
@@ -180,5 +182,12 @@ describe('provenance-gate check', () => {
       const { args } = await createPullRequest();
       await expect(runCli(args, { env: {} })).rejects.toThrow(/GITHUB_TOKEN/);
     });
+  });
+});
+
+describe('provenance-gate --version', () => {
+  it('reports the version from package.json', async () => {
+    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+    expect(createProgram().version()).toBe(pkg.version);
   });
 });

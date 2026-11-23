@@ -2,6 +2,7 @@
  * The command-line interface, built as a value so tests can run it in-process. `src/cli.ts` is the
  * executable entry point and wires it to the real process.
  */
+import { readFileSync } from 'node:fs';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,7 +50,7 @@ export function createProgram(overrides: Partial<CliIo> = {}): Command {
   program
     .name('provenance-gate')
     .description('Merge-policy enforcement driven by AI code provenance (git-ai notes, commit trailers).')
-    .version('0.1.0');
+    .version(packageVersion());
 
   program
     .command('check')
@@ -202,6 +203,15 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** The version in package.json, so `--version` cannot drift from the published package. */
+function packageVersion(): string {
+  const pkg = JSON.parse(readFileSync(resolve(packageRoot(), 'package.json'), 'utf8')) as { version?: unknown };
+  if (typeof pkg.version !== 'string' || pkg.version.length === 0) {
+    throw new Error('package.json has no version');
+  }
+  return pkg.version;
 }
 
 function packageRoot(): string {
